@@ -117,6 +117,10 @@ jobs:
           printf '\nccflags-y += -Idrivers/hisi/hi64xx_dsp\n' \
             >> kernel/drivers/hisi/hi64xx_dsp/Makefile
 
+          # hisi/hifi_dsp: self (hifi_lpp.h included via hifi_mailbox headers)
+          printf '\nccflags-y += -Idrivers/hisi/hifi_dsp\n' \
+            >> kernel/drivers/hisi/hifi_dsp/Makefile
+
           # hisi/drmdriver, perf_ctrl, efuse: SoC platform headers (global_ddr_map.h)
           for mf in \
             kernel/drivers/hisi/drmdriver/Makefile \
