@@ -122,6 +122,10 @@ jobs:
             printf '\nccflags-y += -I%s\n' "$PLATFORM" >> "$mf"
           done
 
+          # rdr_hisi_platform.h #else branch (CONFIG_HISI_BB=n) has missing semicolon
+          sed -i 's/{return -1}/{return -1;}/g' \
+            kernel/include/linux/hisi/rdr_hisi_platform.h
+
       - name: Build kernel
         env:
           ARCH:          arm64
