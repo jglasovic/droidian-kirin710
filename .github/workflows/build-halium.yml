@@ -116,6 +116,17 @@ jobs:
           echo "Applied patched kirin710_defconfig"
           grep -c "CONFIG_" kernel/arch/arm64/configs/kirin710_defconfig
 
+      - name: Patch kernel source
+        run: |
+          # linux/sched/debug.h was split from linux/sched.h upstream but is
+          # absent from this vendor tree; the Hi1102 WiFi driver includes it.
+          # Stub it out — all relevant declarations are already in linux/sched.h.
+          mkdir -p kernel/include/linux/sched
+          echo '#ifndef _LINUX_SCHED_DEBUG_H' >  kernel/include/linux/sched/debug.h
+          echo '#define _LINUX_SCHED_DEBUG_H'  >> kernel/include/linux/sched/debug.h
+          echo '#include <linux/sched.h>'       >> kernel/include/linux/sched/debug.h
+          echo '#endif'                         >> kernel/include/linux/sched/debug.h
+
       - name: Build kernel
         env:
           ARCH:            arm64
