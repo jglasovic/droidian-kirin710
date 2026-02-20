@@ -122,8 +122,12 @@ jobs:
             printf '\nccflags-y += -I%s\n' "$PLATFORM" >> "$mf"
           done
 
-          # rdr_hisi_platform.h #else branch (CONFIG_HISI_BB=n) has missing semicolon
-          sed -i 's/{return -1}/{return -1;}/g' \
+          # rdr_hisi_platform.h stub (CONFIG_HISI_BB=n): fix missing semicolon,
+          # make static inline to avoid multiple-definition linker errors
+          sed -i \
+            -e 's/^int get_module_dump_mem_addr(/static inline int get_module_dump_mem_addr(/' \
+            -e 's/{return -1}/{return -1;}/' \
+            -e 's/{return -1;};/{return -1;}/' \
             kernel/include/linux/hisi/rdr_hisi_platform.h
 
       - name: Build kernel
