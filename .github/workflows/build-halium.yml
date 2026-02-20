@@ -175,12 +175,7 @@ jobs:
 # ── Job 2: Full Halium build (AOSP-based) ────────────────────────────────────
   halium:
     name: Build Halium (halium-boot.img + system.img)
-    # GitHub-hosted larger runner: create it under
-    #   Settings → Actions → Runners → New GitHub-hosted runner
-    #   Name it exactly: ubuntu-22.04-16core
-    #   Pick: Linux, 16-core (64 GB RAM, 600 GB disk)
-    runs-on: ubuntu-22.04-16core
-    needs: kernel
+    runs-on: [self-hosted, ubuntu-22.04, kirin710]
     if: |
       github.event_name == 'workflow_dispatch' && inputs.build_type == 'full-halium'
     env:
