@@ -49,7 +49,9 @@ env:
   VENDOR:        huawei
   HALIUM_BRANCH: halium-13.0
   KERNEL_REPO:   https://github.com/Huawei-Dev/android_kernel_huawei_kirin710
-  KERNEL_BRANCH: android@13
+  # iceows branch (4.9.194) is the branch Iceows used for LineageOS 20 builds.
+  # It has all proprietary Huawei headers that android@13 (4.9.337) is missing.
+  KERNEL_BRANCH: iceows
 
 # ── Job 1: Kernel-only build ─────────────────────────────────────────────────
 jobs:
@@ -120,6 +122,7 @@ jobs:
           CROSS_COMPILE:   aarch64-linux-gnu-
           CC:              "ccache aarch64-linux-gnu-gcc"
         run: |
+          set -o pipefail
           cd kernel
           make ARCH=arm64 kirin710_defconfig
           make ARCH=arm64 \
