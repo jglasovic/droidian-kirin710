@@ -1,27 +1,22 @@
 name: Build Halium for SNE-LX1 (sydney / Kirin 710)
 
-# ── Architecture overview ────────────────────────────────────────────────────
+# ── Runner requirements ───────────────────────────────────────────────────────
 #
-#  GitHub-hosted runners (free):  7 GB RAM, 14 GB SSD  → NOT enough for AOSP
-#  GitHub large runners (paid):   up to 64 GB RAM       → possible but costly
-#  Self-hosted runner (recommended): your own Ubuntu 22.04 build machine
+#  Job 1 · KERNEL-ONLY   → ubuntu-22.04 (GitHub-hosted, FREE for public repos)
+#           2 CPU / 7 GB RAM / ~25 GB disk — enough for a cross-compiled kernel
 #
-#  This workflow supports three modes:
+#  Job 2 · FULL-HALIUM   → self-hosted runner  (AOSP needs 16 GB+ RAM, 200 GB+ disk)
+#           Setup once on an Ubuntu 22.04 machine:
+#             GitHub repo → Settings → Actions → Runners → New self-hosted runner
+#             Label the runner:  self-hosted,ubuntu-22.04,kirin710
 #
-#  1. KERNEL-ONLY  (self-hosted or large runner, ~1h)
-#     Builds only the kernel image. Useful for testing kernel patches.
+#           Alternative (paid): GitHub larger runners — create one under
+#             Settings → Actions → Runners → New GitHub-hosted runner
+#             Recommended size: 16-core (64 GB RAM, ~200 GB disk, ~$0.064/min)
+#             Then change halium job's runs-on to your larger runner's label.
 #
-#  2. FULL-HALIUM  (self-hosted runner, ~4-6h)
-#     Full halium-boot.img + system.img build via AOSP build system.
-#
-#  3. DROIDIAN-PACKAGE  (GitHub-hosted, ~10min)
-#     Packages pre-built halium images + Droidian rootfs into a flashable zip.
-#     Runs after a successful FULL-HALIUM build.
-#
-#  Self-hosted runner setup (run once on your Ubuntu 22.04 build machine):
-#    → GitHub repo → Settings → Actions → Runners → New self-hosted runner
-#    → Follow instructions, label the runner: self-hosted,ubuntu-22.04,kirin710
-# ────────────────────────────────────────────────────────────────────────────
+#  Job 3 · DROIDIAN-PACKAGE → ubuntu-22.04 (GitHub-hosted, free, ~10 min)
+# ─────────────────────────────────────────────────────────────────────────────
 
 on:
   push:
@@ -50,26 +45,29 @@ on:
         type: boolean
 
 env:
-  DEVICE:       sydney
-  VENDOR:       huawei
+  DEVICE:        sydney
+  VENDOR:        huawei
   HALIUM_BRANCH: halium-13.0
-  KERNEL_REPO:  https://github.com/Huawei-Dev/android_kernel_huawei_kirin710
+  KERNEL_REPO:   https://github.com/Huawei-Dev/android_kernel_huawei_kirin710
   KERNEL_BRANCH: android@13
-  DEVICE_REPO:  https://github.com/${{ github.repository }}
-  CCACHE_DIR:   /opt/ccache/kirin710
-  CCACHE_SIZE:  50G
 
 # ── Job 1: Kernel-only build ─────────────────────────────────────────────────
 jobs:
   kernel:
     name: Build Kernel (4.9.337 / kirin710_defconfig)
-    runs-on: [self-hosted, ubuntu-22.04, kirin710]
+    # GitHub-hosted runner — free for public repos, enough for a kernel build
+    runs-on: ubuntu-22.04
     if: |
       github.event_name != 'workflow_dispatch' ||
       inputs.build_type == 'kernel-only' ||
       inputs.build_type == 'full-halium'
     outputs:
       kernel_sha: ${{ steps.meta.outputs.sha }}
+    env:
+      # Keep ccache inside the workspace so actions/cache can persist it.
+      # 5 GB fits comfortably on GitHub-hosted runners (~25 GB free disk).
+      CCACHE_DIR:  ${{ github.workspace }}/.ccache
+      CCACHE_SIZE: 5G
 
     steps:
       - name: Checkout this repo
@@ -89,15 +87,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-kernel-kirin710-${{ runner.os }}-${{ github.sha }}
+          key: ccache-kernel-kirin710-${{ github.sha }}
           restore-keys: |
-            ccache-kernel-kirin710-${{ runner.os }}-
+            ccache-kernel-kirin710-
 
       - name: Configure ccache
         run: |
           ccache --max-size=${{ env.CCACHE_SIZE }}
           ccache --zero-stats
-          echo "CCACHE_DIR=${{ env.CCACHE_DIR }}" >> $GITHUB_ENV
 
       - name: Checkout kernel source
         run: |
@@ -152,11 +149,17 @@ jobs:
 # ── Job 2: Full Halium build (AOSP-based) ────────────────────────────────────
   halium:
     name: Build Halium (halium-boot.img + system.img)
+    # Needs 16 GB+ RAM and 200 GB+ disk — must be self-hosted (or a GitHub
+    # larger runner if you create one under Settings → Actions → Runners).
     runs-on: [self-hosted, ubuntu-22.04, kirin710]
     needs: kernel
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.build_type == 'full-halium') ||
       github.event_name == 'push'
+    env:
+      # On self-hosted runners /opt persists between runs, giving a warm ccache.
+      CCACHE_DIR:  /opt/ccache/kirin710
+      CCACHE_SIZE: 50G
 
     steps:
       - name: Checkout this repo
