@@ -86,11 +86,13 @@ jobs:
           echo 'ccflags-y += -Idrivers/devkit/lcdkit/lcdkit1.0/core/common/hisi' \
             >> kernel/drivers/devkit/lcdkit/lcdkit1.0/core/common/hisi/Makefile
 
-          # tpkit: each subdirectory needs its own dir in the include path
-          find kernel/drivers/devkit/tpkit -name Makefile | while read mf; do
-            reldir="${mf#kernel/}"
-            reldir="${reldir%/Makefile}"
-            echo "ccflags-y += -I${reldir}" >> "$mf"
+          # drivers/devkit and drivers/hisi: each subdir needs its own path
+          for tree in kernel/drivers/devkit kernel/drivers/hisi; do
+            find "$tree" -name Makefile | while read mf; do
+              reldir="${mf#kernel/}"
+              reldir="${reldir%/Makefile}"
+              echo "ccflags-y += -I${reldir}" >> "$mf"
+            done
           done
 
       - name: Build kernel
