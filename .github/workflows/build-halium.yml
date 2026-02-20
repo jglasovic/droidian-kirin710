@@ -120,12 +120,16 @@ jobs:
         run: |
           # linux/sched/debug.h was split from linux/sched.h upstream but is
           # absent from this vendor tree; the Hi1102 WiFi driver includes it.
-          # Stub it out — all relevant declarations are already in linux/sched.h.
           mkdir -p kernel/include/linux/sched
           echo '#ifndef _LINUX_SCHED_DEBUG_H' >  kernel/include/linux/sched/debug.h
           echo '#define _LINUX_SCHED_DEBUG_H'  >> kernel/include/linux/sched/debug.h
           echo '#include <linux/sched.h>'       >> kernel/include/linux/sched/debug.h
           echo '#endif'                         >> kernel/include/linux/sched/debug.h
+
+          # lcdkit hisi/ Makefile is missing -Idrivers/devkit/lcdkit/lcdkit1.0/core/common/hisi
+          # so lcdkit_bias_ic_common.h can't find lcdkit_bias_bl_utility.h via relative include.
+          echo 'ccflags-y += -Idrivers/devkit/lcdkit/lcdkit1.0/core/common/hisi' \
+            >> kernel/drivers/devkit/lcdkit/lcdkit1.0/core/common/hisi/Makefile
 
       - name: Build kernel
         env:
