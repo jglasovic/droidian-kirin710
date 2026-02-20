@@ -175,14 +175,15 @@ jobs:
 # ── Job 2: Full Halium build (AOSP-based) ────────────────────────────────────
   halium:
     name: Build Halium (halium-boot.img + system.img)
-    # Needs 16 GB+ RAM and 200 GB+ disk — must be self-hosted (or a GitHub
-    # larger runner if you create one under Settings → Actions → Runners).
-    runs-on: [self-hosted, ubuntu-22.04, kirin710]
+    # GitHub-hosted larger runner: create it under
+    #   Settings → Actions → Runners → New GitHub-hosted runner
+    #   Name it exactly: ubuntu-22.04-16core
+    #   Pick: Linux, 16-core (64 GB RAM, 600 GB disk)
+    runs-on: ubuntu-22.04-16core
     needs: kernel
     if: |
       github.event_name == 'workflow_dispatch' && inputs.build_type == 'full-halium'
     env:
-      # On self-hosted runners /opt persists between runs, giving a warm ccache.
       CCACHE_DIR:  /opt/ccache/kirin710
       CCACHE_SIZE: 50G
 
