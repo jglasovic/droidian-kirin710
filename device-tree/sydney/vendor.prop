@@ -1,0 +1,25 @@
+# Camera
+ro.vendor.camera.platform_name=SNE
+
+# Bluetooth
+bluetooth.device.default_name=Huawei
+
+# Dual SIM
+ro.dual.sim.phone=true
+ro.product.hardwareversion=HL3SNEM
+persist.sys.dualcards=true
+
+# AI camera
+ro.camera.master_ai_default=off
+ro.camera.front_ai_default=off
+ro.hwcamera.ai_resolution=3264x2448
+
+# Netflix
+ro.netflix.bsp_rev=KIRIN710-15488-1
+
+# Audio primary HAL (confirmed from device: ro.hardware.audio.primary=hisi_wrapper)
+ro.hardware.audio.primary=hisi_wrapper
+
+# GPS chip (confirmed from device: ro.hardware.gps=hi1102)
+ro.hardware.gps=hi1102
+ro.hardware.hisupl=hi1102
