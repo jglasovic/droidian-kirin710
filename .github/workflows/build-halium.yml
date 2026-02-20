@@ -135,6 +135,7 @@ jobs:
                CROSS_COMPILE=aarch64-linux-gnu- \
                CC="ccache aarch64-linux-gnu-gcc" \
                "BALONG_INC=-I${KDIR}/kernel" \
+               KCFLAGS="-Wno-error=maybe-uninitialized" \
                -j$(nproc) Image.gz 2>&1 | tee ../kernel_build.log
           echo "Kernel size: $(du -sh arch/arm64/boot/Image.gz)"
 
