@@ -49,9 +49,9 @@ env:
   VENDOR:        huawei
   HALIUM_BRANCH: halium-13.0
   KERNEL_REPO:   https://github.com/Huawei-Dev/android_kernel_huawei_kirin710
-  # iceows branch (4.9.194) is the branch Iceows used for LineageOS 20 builds.
-  # It has all proprietary Huawei headers that android@13 (4.9.337) is missing.
-  KERNEL_BRANCH: iceows
+  # android@13 (4.9.337) matches the kernel running on the device.
+  # BALONG_INC handles the Huawei angle-bracket includes (cgroup_pids.h etc.).
+  KERNEL_BRANCH: android@13
 
 # ── Job 1: Kernel-only build ─────────────────────────────────────────────────
 jobs:
