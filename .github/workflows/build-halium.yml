@@ -124,10 +124,17 @@ jobs:
         run: |
           set -o pipefail
           cd kernel
+          # BALONG_INC mimics what the AOSP build system passes to the Huawei
+          # kernel so that angle-bracket includes like
+          #   #include <./cgroup_huawei/cgroup_pids.h>
+          # resolve correctly (they live under kernel/cgroup_huawei/, not the
+          # default GCC search path).
+          KDIR=$(pwd)
           make ARCH=arm64 kirin710_defconfig
           make ARCH=arm64 \
                CROSS_COMPILE=aarch64-linux-gnu- \
                CC="ccache aarch64-linux-gnu-gcc" \
+               "BALONG_INC=-I${KDIR}/kernel" \
                -j$(nproc) Image.gz 2>&1 | tee ../kernel_build.log
           echo "Kernel size: $(du -sh arch/arm64/boot/Image.gz)"
 
