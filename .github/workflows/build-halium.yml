@@ -82,17 +82,44 @@ jobs:
           printf '#ifndef _LINUX_SCHED_DEBUG_H\n#define _LINUX_SCHED_DEBUG_H\n#include <linux/sched.h>\n#endif\n' \
             > kernel/include/linux/sched/debug.h
 
-          # lcdkit hisi/ Makefile missing include path for lcdkit_bias_bl_utility.h
-          echo 'ccflags-y += -Idrivers/devkit/lcdkit/lcdkit1.0/core/common/hisi' \
+          # Kirin 710 SoC platform headers (soc_sctrl_interface.h, global_ddr_map.h etc.)
+          PLATFORM=drivers/hisi/ap/platform/kirin710
+
+          # lcdkit hisi/: own dir + SoC platform headers
+          printf '\nccflags-y += -Idrivers/devkit/lcdkit/lcdkit1.0/core/common/hisi\n' \
+            >> kernel/drivers/devkit/lcdkit/lcdkit1.0/core/common/hisi/Makefile
+          printf '\nccflags-y += -I%s\n' "$PLATFORM" \
             >> kernel/drivers/devkit/lcdkit/lcdkit1.0/core/common/hisi/Makefile
 
-          # drivers/devkit and drivers/hisi: each subdir needs its own path
-          for tree in kernel/drivers/devkit kernel/drivers/hisi; do
-            find "$tree" -name Makefile | while read mf; do
-              reldir="${mf#kernel/}"
-              reldir="${reldir%/Makefile}"
-              echo "ccflags-y += -I${reldir}" >> "$mf"
-            done
+          # tpkit core and 3_0: need tpkit root on include path
+          printf '\nccflags-y += -Idrivers/devkit/tpkit\n' \
+            >> kernel/drivers/devkit/tpkit/Makefile
+          printf '\nccflags-y += -Idrivers/devkit/tpkit/3_0\n' \
+            >> kernel/drivers/devkit/tpkit/3_0/Makefile
+
+          # tpkit/panel: each subdir needs tpkit root + itself
+          find kernel/drivers/devkit/tpkit/panel -name Makefile | while read mf; do
+            reldir="${mf#kernel/}"; reldir="${reldir%/Makefile}"
+            printf '\nccflags-y += -Idrivers/devkit/tpkit\n' >> "$mf"
+            printf '\nccflags-y += -I%s\n' "$reldir" >> "$mf"
+          done
+
+          # hisi/ddrc: self + SoC platform headers (global_ddr_map.h)
+          printf '\nccflags-y += -Idrivers/hisi/ddrc\n' \
+            >> kernel/drivers/hisi/ddrc/Makefile
+          printf '\nccflags-y += -I%s\n' "$PLATFORM" \
+            >> kernel/drivers/hisi/ddrc/Makefile
+
+          # hisi/hi64xx_dsp: self (hi64xx_hifi_interface.h etc.)
+          printf '\nccflags-y += -Idrivers/hisi/hi64xx_dsp\n' \
+            >> kernel/drivers/hisi/hi64xx_dsp/Makefile
+
+          # hisi/drmdriver, perf_ctrl, efuse: SoC platform headers (global_ddr_map.h)
+          for mf in \
+            kernel/drivers/hisi/drmdriver/Makefile \
+            kernel/drivers/hisi/perf_ctrl/Makefile \
+            kernel/drivers/hisi/efuse/Makefile; do
+            printf '\nccflags-y += -I%s\n' "$PLATFORM" >> "$mf"
           done
 
       - name: Build kernel
