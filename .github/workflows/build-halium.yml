@@ -86,6 +86,14 @@ jobs:
           echo 'ccflags-y += -Idrivers/devkit/lcdkit/lcdkit1.0/core/common/hisi' \
             >> kernel/drivers/devkit/lcdkit/lcdkit1.0/core/common/hisi/Makefile
 
+          # tpkit headers not in include path (huawei_ts_kit.h etc.)
+          echo 'ccflags-y += -Idrivers/devkit/tpkit' \
+            >> kernel/drivers/devkit/tpkit/Makefile
+          echo 'ccflags-y += -Idrivers/devkit/tpkit/3_0' \
+            >> kernel/drivers/devkit/tpkit/3_0/Makefile
+          echo 'ccflags-y += -Idrivers/devkit/tpkit/panel' \
+            >> kernel/drivers/devkit/tpkit/panel/novatek_hybrid/Makefile
+
       - name: Build kernel
         env:
           ARCH:          arm64
