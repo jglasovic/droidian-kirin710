@@ -1,20 +1,8 @@
 name: Build Halium for SNE-LX1 (sydney / Kirin 710)
 
-# Runs on self-hosted runner (Colima on M2 Pro).
-# Setup: colima start --arch aarch64 --vm-type vz --cpu 10 --memory 28 --disk 300 --profile halium
-# Register runner with labels: self-hosted,ubuntu-22.04,kirin710
-
 on:
   workflow_dispatch:
     inputs:
-      build_type:
-        description: 'What to build'
-        required: true
-        default: 'full-halium'
-        type: choice
-        options:
-          - full-halium
-          - droidian-package
       upload_release:
         description: 'Upload as GitHub Release'
         required: false
@@ -22,230 +10,191 @@ on:
         type: boolean
 
 env:
-  DEVICE:        sydney
-  VENDOR:        huawei
-  HALIUM_BRANCH: halium-13.0
+  KERNEL_REPO:   https://github.com/Huawei-Dev/android_kernel_huawei_kirin710
+  KERNEL_BRANCH: android@13
+  CCACHE_DIR:    ${{ github.workspace }}/.ccache
+  CCACHE_SIZE:   5G
 
-# ── Job 1: Full Halium build ──────────────────────────────────────────────────
+  # Boot image parameters for Kirin 710 / SNE-LX1 (from BoardConfigCommon.mk)
+  BOARD_KERNEL_BASE:            "0x00078000"
+  BOARD_KERNEL_PAGESIZE:        "2048"
+  BOARD_KERNEL_OFFSET:          "0x00008000"
+  BOARD_RAMDISK_OFFSET:         "0x07b88000"
+  BOARD_TAGS_OFFSET:            "0x07988000"
+  BOARD_SECOND_OFFSET:          "0x00e88000"
+  BOARD_BOOTIMG_HEADER_VERSION: "1"
+  BOARD_KERNEL_CMDLINE: >-
+    loglevel=4 initcall_debug=n page_tracker=on
+    unmovable_isolate1=2:192M,3:224M,4:256M
+    printktimer=0xfff0a000,0x534,0x538
+    androidboot.init_fatal_reboot_target=recovery
+
+  # UBports CI — Halium 13 generic arm64 GSI (system + ramdisk)
+  UBPORTS_GSI_URL: >-
+    https://ci.ubports.com/job/UBportsCommunityPortsJenkinsCI/job/ubports%252Fporting%252Fcommunity-ports%252Fjenkins-ci%252Fgeneric_arm64/job/halium-13.0/836/artifact/halium_halium_arm64.tar.xz
+
 jobs:
-  halium:
-    name: Build Halium (halium-boot.img + system.img)
-    runs-on: [self-hosted, ubuntu-22.04, kirin710]
-    if: inputs.build_type == 'full-halium'
-    env:
-      CCACHE_DIR:  /opt/ccache/kirin710
-      CCACHE_SIZE: 50G
-
-    steps:
-      - name: Checkout this repo
-        uses: actions/checkout@v4
-
-      - name: Install AOSP build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            git-core gnupg flex bison gperf build-essential zip curl \
-            zlib1g-dev libncurses5-dev x11proto-core-dev \
-            libx11-dev libgl1-mesa-dev libxml2-utils xsltproc \
-            unzip python3 python3-pip python-is-python3 openjdk-11-jdk \
-            ccache rsync lzop bc libssl-dev schedtool patchelf \
-            libncurses-dev device-tree-compiler repo
-
-      - name: Set up repo tool
-        run: |
-          mkdir -p ~/bin
-          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-          chmod a+x ~/bin/repo
-          echo "$HOME/bin" >> $GITHUB_PATH
-
-      - name: Initialise Halium source
-        run: |
-          mkdir -p ${{ runner.temp }}/halium
-          cd ${{ runner.temp }}/halium
-          if [ ! -d .repo ]; then
-            repo init \
-              -u https://github.com/Halium/android \
-              -b ${{ env.HALIUM_BRANCH }} \
-              --depth=1 --no-clone-bundle
-          fi
-
-      - name: Write local manifest
-        run: |
-          mkdir -p ${{ runner.temp }}/halium/.repo/local_manifests
-          cat > ${{ runner.temp }}/halium/.repo/local_manifests/sydney.xml << 'XML'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <manifest>
-            <remote name="gh" fetch="https://github.com/" />
-
-            <project path="kernel/huawei/kirin710"
-                     name="Huawei-Dev/android_kernel_huawei_kirin710"
-                     remote="gh" revision="android@13" />
-
-            <!-- device/huawei/sydney is populated by the "Copy device tree" step below -->
-
-            <project path="device/huawei/kirin710-9-common"
-                     name="Iceows/android_device_huawei_kirin710-9-common"
-                     remote="gh" revision="lineage-20" />
-
-            <project path="device/huawei/compat"
-                     name="Huawei-Dev/android_device_huawei_compat"
-                     remote="gh" revision="main" />
-
-            <project path="vendor/huawei/kirin710-9-common"
-                     name="Iceows/android_vendor_huawei_kirin710-9-common"
-                     remote="gh" revision="lineage-20" />
-
-            <!-- Sydney ODM vendor blobs (extracted from live SNE-LX1 device) -->
-            <project path="vendor/huawei/sydney"
-                     name="jglasovic/android_vendor_huawei_sydney"
-                     remote="gh" revision="main"
-                     clone-depth="1" />
-          </manifest>
-          XML
-
-      - name: Sync Halium source
-        working-directory: ${{ runner.temp }}/halium
-        run: |
-          repo sync \
-            -j$(nproc) -c \
-            --no-clone-bundle --no-tags \
-            --optimized-fetch --retry-fetches=5
-
-      - name: Copy device tree from this repo
-        run: |
-          cp -r device-tree/sydney \
-            ${{ runner.temp }}/halium/device/huawei/sydney
-
-      - name: Apply patched kernel defconfig
-        run: |
-          cp kernel-configs/arch/arm64/configs/kirin710_defconfig \
-             ${{ runner.temp }}/halium/kernel/huawei/kirin710/arch/arm64/configs/kirin710_defconfig
-
-      - name: Configure ccache
-        run: |
-          mkdir -p ${{ env.CCACHE_DIR }}
-          export USE_CCACHE=1
-          export CCACHE_EXEC=$(which ccache)
-          ccache --max-size=${{ env.CCACHE_SIZE }}
-
-      - name: Build halium-boot and system image
-        working-directory: ${{ runner.temp }}/halium
-        env:
-          USE_CCACHE: "1"
-        run: |
-          source build/envsetup.sh
-          breakfast ${{ env.DEVICE }}
-          mka halium-boot 2>&1 | tee /tmp/build_haliumboot.log
-          mka systemimage  2>&1 | tee /tmp/build_systemimage.log
-
-      - name: Collect artifacts
-        run: |
-          OUT=${{ runner.temp }}/halium/out/target/product/${{ env.DEVICE }}
-          mkdir -p artifacts
-          cp "$OUT/halium-boot.img"  artifacts/
-          cp "$OUT/system.img"       artifacts/
-          echo "$(date +%Y%m%d-%H%M)" > artifacts/build_date.txt
-          echo "${{ github.sha }}"   > artifacts/git_sha.txt
-          ls -lh artifacts/
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: halium-sydney-${{ github.run_number }}
-          path: artifacts/
-          retention-days: 60
-
-      - name: Create GitHub Release
-        if: ${{ inputs.upload_release == true && github.ref == 'refs/heads/main' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: halium-${{ github.run_number }}-${{ github.sha }}
-          name: "Halium sydney - Build ${{ github.run_number }}"
-          body: |
-            ## Halium build for Huawei Mate 20 Lite (SNE-LX1 / sydney)
-
-            **Kernel:** 4.9.337 (Kirin 710)
-            **Halium branch:** ${{ env.HALIUM_BRANCH }}
-            **Build date:** $(cat artifacts/build_date.txt)
-
-            ### Flash instructions
-            ```
-            fastboot flash boot   halium-boot.img
-            fastboot flash system system.img
-            ```
-            Then flash Droidian rootfs from https://github.com/droidian/droidian/releases
-
-            ### Hardware status
-            - WiFi: needs HiSilicon Hi1102 firmware in /lib/firmware/
-            - Display: 1080x2340 @ 480dpi
-            - Dual SIM: slot1 + slot2
-            - NFC: NXP chip via vendor HAL
-          files: artifacts/*
-          draft: false
-          prerelease: true
-
-# ── Job 2: Package Droidian ───────────────────────────────────────────────────
-  droidian-package:
-    name: Package Droidian flashable zip
+  build:
+    name: Build halium-boot.img + fetch system.img
     runs-on: ubuntu-22.04
-    needs: halium
-    if: inputs.build_type == 'droidian-package'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Download halium artifacts
-        uses: actions/download-artifact@v4
         with:
-          name: halium-sydney-${{ github.run_number }}
-          path: halium-artifacts/
+          fetch-depth: 1
 
-      - name: Download latest Droidian rootfs
+      - name: Install dependencies
         run: |
-          DROIDIAN_URL=$(curl -s https://api.github.com/repos/droidian/droidian/releases/latest \
-            | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          assets = data.get('assets', [])
-          for a in assets:
-              n = a['name']
-              if 'phone' in n and 'arm64' in n and n.endswith('.zip'):
-                  print(a['browser_download_url'])
-                  break
-          ")
-          echo "Downloading: $DROIDIAN_URL"
-          wget -q "$DROIDIAN_URL" -O droidian-rootfs.zip
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git bc bison flex libssl-dev make libc6-dev libncurses5-dev \
+            crossbuild-essential-arm64 python3 ccache zip unzip curl wget \
+            lzop device-tree-compiler android-tools-mkbootimg \
+            cpio
 
-      - name: Build flashable package
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-kernel-kirin710-${{ github.sha }}
+          restore-keys: ccache-kernel-kirin710-
+
+      - name: Configure ccache
         run: |
-          mkdir -p flashable/META-INF/com/google/android
-          cp halium-artifacts/halium-boot.img flashable/
-          cp halium-artifacts/system.img       flashable/
-          cp droidian-rootfs.zip               flashable/
+          ccache --max-size=${{ env.CCACHE_SIZE }}
+          ccache --zero-stats
 
-          cat > flashable/META-INF/com/google/android/updater-script << 'SCRIPT'
-          ui_print("Droidian for Huawei Mate 20 Lite (SNE-LX1)");
-          ui_print("Flashing halium-boot...");
-          package_extract_file("halium-boot.img", "/dev/block/by-name/kernel");
-          ui_print("Flashing system...");
-          package_extract_file("system.img", "/dev/block/by-name/system");
-          ui_print("Done! Now flash droidian-rootfs.zip separately in TWRP.");
-          SCRIPT
+      - name: Checkout kernel source
+        run: |
+          git clone --depth=1 -b "${{ env.KERNEL_BRANCH }}" \
+            "${{ env.KERNEL_REPO }}" kernel
 
-          cat > flashable/META-INF/com/google/android/update-binary << 'BINARY'
-          #!/sbin/sh
-          ZIPFILE="$3"
-          ui_print() { echo "ui_print $1" > /proc/self/fd/$2; echo "ui_print" > /proc/self/fd/$2; }
-          . /tmp/updater-script
-          BINARY
+      - name: Apply defconfig
+        run: |
+          cp kernel-configs/arch/arm64/configs/kirin710_defconfig \
+             kernel/arch/arm64/configs/kirin710_defconfig
 
-          cd flashable
-          zip -r ../droidian-sydney-${{ github.run_number }}.zip .
+      - name: Patch kernel source
+        run: |
+          # linux/sched/debug.h missing from vendor tree — stub it out
+          mkdir -p kernel/include/linux/sched
+          printf '#ifndef _LINUX_SCHED_DEBUG_H\n#define _LINUX_SCHED_DEBUG_H\n#include <linux/sched.h>\n#endif\n' \
+            > kernel/include/linux/sched/debug.h
 
-      - name: Upload package
+          # lcdkit hisi/ Makefile missing include path for lcdkit_bias_bl_utility.h
+          echo 'ccflags-y += -Idrivers/devkit/lcdkit/lcdkit1.0/core/common/hisi' \
+            >> kernel/drivers/devkit/lcdkit/lcdkit1.0/core/common/hisi/Makefile
+
+      - name: Build kernel
+        env:
+          ARCH:          arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CC:            "ccache aarch64-linux-gnu-gcc"
+        run: |
+          set -o pipefail
+          cd kernel
+          KDIR=$(pwd)
+          make ARCH=arm64 kirin710_defconfig
+          make ARCH=arm64 \
+               CROSS_COMPILE=aarch64-linux-gnu- \
+               CC="ccache aarch64-linux-gnu-gcc" \
+               "BALONG_INC=-I${KDIR}/kernel" \
+               KCFLAGS="-Wno-error=maybe-uninitialized" \
+               -j$(nproc) Image.gz 2>&1 | tee ../kernel_build.log
+          echo "Kernel size: $(du -sh arch/arm64/boot/Image.gz)"
+
+      - name: Download Halium GSI
+        run: |
+          echo "Downloading halium_halium_arm64.tar.xz from UBports CI..."
+          wget -q "${{ env.UBPORTS_GSI_URL }}" -O halium_arm64.tar.xz
+          echo "Download size: $(du -sh halium_arm64.tar.xz)"
+
+          echo "Contents of archive:"
+          tar -tJf halium_arm64.tar.xz
+
+      - name: Extract system.img and ramdisk
+        run: |
+          mkdir -p gsi
+          tar -xJf halium_arm64.tar.xz -C gsi/
+          echo "Extracted files:"
+          find gsi/ -type f | sort
+
+          # Droidian names it android-rootfs.img, UBports may use system.img
+          if [ -f gsi/system.img ]; then
+            cp gsi/system.img system.img
+          elif [ -f gsi/android-rootfs.img ]; then
+            cp gsi/android-rootfs.img system.img
+          else
+            echo "ERROR: no system.img or android-rootfs.img found in archive"
+            exit 1
+          fi
+          echo "system.img size: $(du -sh system.img)"
+
+          # Extract ramdisk — may be ramdisk.img or inside a boot.img
+          if [ -f gsi/ramdisk.img ]; then
+            cp gsi/ramdisk.img ramdisk.img
+          elif [ -f gsi/boot.img ]; then
+            echo "Found boot.img — extracting ramdisk..."
+            unpackbootimg -i gsi/boot.img -o bootimg_unpacked/
+            ls bootimg_unpacked/
+            cp bootimg_unpacked/*ramdisk* ramdisk.img
+          else
+            echo "ERROR: no ramdisk.img or boot.img found in archive"
+            exit 1
+          fi
+          echo "ramdisk.img size: $(du -sh ramdisk.img)"
+
+      - name: Build halium-boot.img
+        run: |
+          mkbootimg \
+            --kernel  kernel/arch/arm64/boot/Image.gz \
+            --ramdisk ramdisk.img \
+            --base            ${{ env.BOARD_KERNEL_BASE }} \
+            --pagesize        ${{ env.BOARD_KERNEL_PAGESIZE }} \
+            --kernel_offset   ${{ env.BOARD_KERNEL_OFFSET }} \
+            --ramdisk_offset  ${{ env.BOARD_RAMDISK_OFFSET }} \
+            --tags_offset     ${{ env.BOARD_TAGS_OFFSET }} \
+            --second_offset   ${{ env.BOARD_SECOND_OFFSET }} \
+            --header_version  ${{ env.BOARD_BOOTIMG_HEADER_VERSION }} \
+            --cmdline         "${{ env.BOARD_KERNEL_CMDLINE }}" \
+            --output          halium-boot.img
+
+          echo "halium-boot.img size: $(du -sh halium-boot.img)"
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: droidian-sydney-flashable-${{ github.run_number }}
-          path: droidian-sydney-${{ github.run_number }}.zip
-          retention-days: 90
+          name: halium-sydney-${{ github.run_number }}
+          path: |
+            halium-boot.img
+            system.img
+            kernel_build.log
+          retention-days: 60
+
+      - name: ccache stats
+        run: ccache --show-stats
+
+      - name: Create GitHub Release
+        if: ${{ inputs.upload_release == true }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: halium-${{ github.run_number }}
+          name: "Halium sydney - Build ${{ github.run_number }}"
+          body: |
+            ## Halium for Huawei Mate 20 Lite (SNE-LX1 / sydney)
+
+            **Kernel:** 4.9.337 (android@13)
+            **System:** Halium 13 generic arm64 GSI (UBports CI #836)
+
+            ### Flash
+            ```
+            fastboot flash kernel  halium-boot.img
+            fastboot flash system  system.img
+            ```
+            Then flash Droidian rootfs from https://github.com/droidian-images/droidian/releases
+          files: |
+            halium-boot.img
+            system.img
+          draft: false
+          prerelease: true
