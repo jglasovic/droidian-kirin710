@@ -104,10 +104,13 @@ jobs:
             printf '\nccflags-y += -I%s\n' "$reldir" >> "$mf"
           done
 
-          # hisi/ddrc: self + SoC platform headers (global_ddr_map.h)
+          # hisi/ddrc: self + SoC platform headers + libhwsecurec (securec.h)
+          # (libhwsecurec path is normally gated on CONFIG_HISI_BB in the Makefile)
           printf '\nccflags-y += -Idrivers/hisi/ddrc\n' \
             >> kernel/drivers/hisi/ddrc/Makefile
           printf '\nccflags-y += -I%s\n' "$PLATFORM" \
+            >> kernel/drivers/hisi/ddrc/Makefile
+          printf '\nccflags-y += -Idrivers/hisi/tzdriver/libhwsecurec\n' \
             >> kernel/drivers/hisi/ddrc/Makefile
 
           # hisi/hi64xx_dsp: self (hi64xx_hifi_interface.h etc.)
