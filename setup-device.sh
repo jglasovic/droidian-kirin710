@@ -33,7 +33,7 @@ echo "[*] Connecting to ${DEVICE_USER}@${DEVICE_IP}..."
 ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no "${DEVICE_USER}@${DEVICE_IP}" "echo ${DEVICE_PASS} | sudo -S bash -s" << SETUP_EOF
 set -euo pipefail
 
-echo "[1/7] Setting up vendor partition mount..."
+echo "[1/8] Setting up vendor partition mount..."
 cat > /etc/systemd/system/android-system-vendor.mount << 'UNIT'
 [Unit]
 Description=Mount Android vendor partition
@@ -55,7 +55,7 @@ systemctl daemon-reload
 systemctl enable android-system-vendor.mount
 echo "    vendor mount: OK"
 
-echo "[2/7] Setting up Hi1102 WiFi init service..."
+echo "[2/8] Setting up Hi1102 WiFi init service..."
 cat > /etc/systemd/system/hisi-wifi-init.service << 'UNIT'
 [Unit]
 Description=Initialize Hi1102 WiFi
@@ -75,11 +75,11 @@ systemctl daemon-reload
 systemctl enable hisi-wifi-init.service
 echo "    wifi init: OK"
 
-echo "[3/7] Masking default wpa_supplicant (D-Bus mode causes CPU spin)..."
+echo "[3/8] Masking default wpa_supplicant (D-Bus mode causes CPU spin)..."
 systemctl mask wpa_supplicant.service 2>/dev/null || true
 echo "    wpa_supplicant masked: OK"
 
-echo "[4/7] Setting up wpa_supplicant config..."
+echo "[4/8] Setting up wpa_supplicant config..."
 mkdir -p /etc/wpa_supplicant
 cat > /etc/wpa_supplicant/wpa_supplicant.conf << WPACFG
 ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev
@@ -114,7 +114,7 @@ systemctl daemon-reload
 systemctl enable wpa_supplicant-wlan0.service
 echo "    wpa_supplicant (interface mode): OK"
 
-echo "[5/7] Installing and configuring dhcpcd..."
+echo "[5/8] Installing and configuring dhcpcd..."
 apt-get update -qq
 apt-get install -y --no-install-recommends dhcpcd5 2>&1 | tail -3
 if ! grep -q "allowinterfaces wlan0" /etc/dhcpcd.conf 2>/dev/null; then
@@ -122,7 +122,7 @@ if ! grep -q "allowinterfaces wlan0" /etc/dhcpcd.conf 2>/dev/null; then
 fi
 echo "    dhcpcd: OK"
 
-echo "[6/7] Setting up display-off service..."
+echo "[6/8] Setting up display-off service..."
 cat > /etc/systemd/system/display-off.service << 'UNIT'
 [Unit]
 Description=Turn off LCD display
@@ -140,7 +140,17 @@ systemctl daemon-reload
 systemctl enable display-off.service
 echo "    display-off: OK"
 
-echo "[7/7] Disabling LXC Android container (not needed)..."
+echo "[7/8] Locking WiFi MAC address (Hi1102 randomizes on each boot)..."
+cat > /etc/systemd/network/10-wlan0-mac.link << 'UNIT'
+[Match]
+OriginalName=wlan0
+
+[Link]
+MACAddress=c0:11:02:e8:50:ea
+UNIT
+echo "    MAC locked to c0:11:02:e8:50:ea: OK"
+
+echo "[8/8] Disabling LXC Android container (not needed)..."
 systemctl stop lxc@android 2>/dev/null || true
 systemctl mask lxc@android 2>/dev/null || true
 echo "    lxc masked: OK"
