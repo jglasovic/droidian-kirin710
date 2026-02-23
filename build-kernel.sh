@@ -228,12 +228,14 @@ printf '\nccflags-y += -Idrivers/huawei_platform/inputhub/kirin710\n' \
 sed -i 's|#include "audit.h"|#include "include/audit.h"|' \
   kernel/security/selinux/hooks.c
 
-# rdr_hisi_platform.h stub: fix missing semicolon in #else stub body
-# and add static inline to get_module_dump_mem_addr stub (prevents multiple-definition linker errors)
+# rdr_hisi_platform.h: fix missing semicolon in #else stub body
 sed -i \
   -e 's/{return -1}/{return -1;}/' \
   -e 's/{return -1;};/{return -1;}/' \
-  -e 's/^int get_module_dump_mem_addr/static inline int get_module_dump_mem_addr/' \
+  kernel/include/linux/hisi/rdr_hisi_platform.h
+# Remove the forward declaration of get_module_dump_mem_addr from the #ifdef CONFIG_HISI_BB
+# block (it causes -Werror=unused-function). The real definition is in the blackbox code.
+sed -i '/^static inline int get_module_dump_mem_addr(dump_mem_module modu, unsigned char \*\*dump_addr);$/d' \
   kernel/include/linux/hisi/rdr_hisi_platform.h
 
 # sound/usb: usbaudio_mailbox/ and hifi/ depend on HIFI mailbox; make conditional
@@ -269,30 +271,10 @@ EXPORT_SYMBOL(usbaudio_ctrl_wake_up);
 int usbaudio_nv_is_ready(void) { return 1; }
 EXPORT_SYMBOL(usbaudio_nv_is_ready);
 
-/* drivers/mmc/core/hisi_mmc_bkops.c calls this;
-   implementation lived in blackbox (CONFIG_HISI_BB) */
-void rdr_syserr_process_for_ap(unsigned int a, unsigned long long b, unsigned long long c) {}
-EXPORT_SYMBOL(rdr_syserr_process_for_ap);
-
 /* lcdkit_disp.c calls this unconditionally;
    implementation lived in inputhub/kirin710/sensor_feima.c (CONFIG_INPUTHUB_20) */
 void save_light_to_sensorhub(unsigned int p1, unsigned int p2) {}
 EXPORT_SYMBOL(save_light_to_sensorhub);
-
-/* drivers/hisi/memory_dump/kernel_dump.c and fs/pstore/platform.c call this;
-   implementation lived in mntn (CONFIG_HISILICON_PLATFORM_MAINTAIN) */
-int register_mntn_dump(int mod_id, unsigned int size, void **vaddr) { return -1; }
-EXPORT_SYMBOL(register_mntn_dump);
-
-/* drivers/hisi/hwzerohung/zrhung_transtation.c calls this;
-   implementation lived in mntn/hisi_bootup_keypoint.c (CONFIG_HISILICON_PLATFORM_MAINTAIN) */
-unsigned int get_boot_keypoint(void) { return 0; }
-EXPORT_SYMBOL(get_boot_keypoint);
-
-/* drivers/hisi/oae_fw_patch/do_mounts_oae_dm.c calls this;
-   implementation lived in mntn/hisi_bootup_keypoint.c (CONFIG_HISILICON_PLATFORM_MAINTAIN) */
-unsigned int get_last_boot_keypoint(void) { return 0; }
-EXPORT_SYMBOL(get_last_boot_keypoint);
 
 /* block/hisi-blk-flush.S calls this from precompiled assembly;
    implementation lived in hisi_powerkey_spmi.c (CONFIG_HISI_POWERKEY_SPMI) */
@@ -301,6 +283,13 @@ int hisi_powerkey_register_notifier(struct notifier_block *nb) { return 0; }
 EXPORT_SYMBOL(hisi_powerkey_register_notifier);
 int hisi_powerkey_unregister_notifier(struct notifier_block *nb) { return 0; }
 EXPORT_SYMBOL(hisi_powerkey_unregister_notifier);
+
+/* block/hisi-blk-latency.S calls these from precompiled assembly;
+   implementation lived in hwzerohung/watchpoint/zrhung_wp_io.c */
+void iowp_workqueue_init(void) {}
+EXPORT_SYMBOL(iowp_workqueue_init);
+void iowp_report(int pid, int tgid, char *name) {}
+EXPORT_SYMBOL(iowp_report);
 STUBEOF
 
 # Add stub object to hisi drivers Makefile
