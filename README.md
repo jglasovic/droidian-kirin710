@@ -30,7 +30,7 @@ This is the **first Droidian port for any Kirin device**. Unlike Qualcomm/MediaT
 │   └── arch/arm64/configs/
 │       └── kirin710_defconfig    # Customized kernel config
 ├── build-kernel.sh               # Build script: clone kernel, patch, compile
-├── build-bootimg.sh              # Build script: download GSI, patch ramdisk, pack boot image
+├── build-bootimg.sh              # Build script: download Halium initramfs, patch for Kirin 710, pack boot image
 ├── setup-device.sh               # Post-flash setup: WiFi, vendor mount, SSH over network
 ├── collect_device_info.sh        # Dumps hardware info from device via ADB
 └── extract-vendor-sydney.sh      # Extracts vendor blobs from device via ADB
@@ -51,7 +51,7 @@ This is the **first Droidian port for any Kirin device**. Unlike Qualcomm/MediaT
 
 ### Images to Download
 1. **Droidian rootfs** — from [droidian-images releases](https://github.com/droidian-images/droidian/releases) (API 33, arm64)
-2. **Halium system image** — the CI workflow downloads this from UBports CI automatically, or get it manually from the [UBports CI](https://ci.ubports.com)
+2. **Halium system image** — get from [UBports CI](https://ci.ubports.com) (Halium 13 generic arm64 GSI)
 
 ## Building
 
@@ -59,8 +59,8 @@ This is the **first Droidian port for any Kirin device**. Unlike Qualcomm/MediaT
 
 Push to the repo and trigger the `Build Halium` workflow manually from the Actions tab. It runs on a native ARM64 runner and:
 1. Runs `build-kernel.sh` — clones kernel, patches ~40 broken include paths, compiles
-2. Runs `build-bootimg.sh` — downloads Halium GSI, patches ramdisk (init=/init fix), packs boot image
-3. Uploads artifacts (halium-boot.img, system.img)
+2. Runs `build-bootimg.sh` — downloads Halium initramfs, applies Kirin 710 patches (switch_root, init override, non-ext4 userdata), packs boot image
+3. Uploads `halium-boot.img` artifact
 
 ### Option B: Local Build
 
@@ -73,11 +73,11 @@ colima ssh
 # Step 1: Build the kernel
 bash build-kernel.sh
 
-# Step 2: Download GSI, patch ramdisk, pack boot image
+# Step 2: Download Halium initramfs, patch, pack boot image
 bash build-bootimg.sh
 ```
 
-Output: `halium-boot.img` and `system.img` in the project root.
+Output: timestamped images in `out/` (e.g., `out/halium-boot-20260223-130716.img`) with a `halium-boot.img` symlink to the latest build.
 
 ## Flashing
 
@@ -86,13 +86,9 @@ Boot into fastboot mode (hold Volume Down + Power while connecting USB):
 ```bash
 # Flash the kernel (boot partition is named "kernel" on Kirin 710, not "boot")
 fastboot flash kernel halium-boot.img
-
-# Flash the Android system image to userdata
-# (Halium uses system.img on the userdata partition, NOT the system partition)
-fastboot flash userdata system.img
 ```
 
-Then flash the Droidian rootfs according to [Droidian installation docs](https://devices.droidian.org/).
+For system.img and rootfs, flash the Droidian image from [droidian-images releases](https://github.com/droidian-images/droidian/releases) according to [Droidian installation docs](https://devices.droidian.org/).
 
 ## Post-Flash Setup
 
@@ -251,7 +247,23 @@ sudo systemctl daemon-reload
 sudo systemctl enable display-off.service
 ```
 
-### 6. Reboot and Verify
+### 6. Lock WiFi MAC Address
+
+The Hi1102 driver randomizes the last 3 bytes of the MAC address on each boot. To get a stable MAC for static DHCP leases on your router:
+
+```bash
+sudo tee /etc/systemd/network/10-wlan0-mac.link << 'EOF'
+[Match]
+OriginalName=wlan0
+
+[Link]
+MACAddress=c0:11:02:e8:50:ea
+EOF
+```
+
+Replace the MAC with the one assigned to your device (`ip link show wlan0`).
+
+### 7. Reboot and Verify
 
 ```bash
 sudo reboot
@@ -279,14 +291,24 @@ The HiSilicon Hi1102 WiFi driver has several issues when used outside of Android
 | `wal_cfg80211_scan` uses infinite wait | Scan requests can hang forever if firmware doesn't respond | Use nl80211 (not wext), ensure firmware is loaded before scanning |
 | `get_station` called repeatedly with 5s timeout | CPU usage spikes when NetworkManager polls station info | Don't use NetworkManager for WiFi management |
 | systemd-networkd crashes | "Could not enumerate wireless LAN stations" timeout | Use dhcpcd instead |
+| MAC address randomized on boot | Last 3 bytes change each reboot, breaks static DHCP | Lock MAC via systemd `.link` file |
 
 ### Kernel Threads in D State
 
 After boot, ~26 kernel threads appear in D (uninterruptible sleep) state — modem, camera ISP, HISEE, etc. These are waiting for Android HAL services that aren't running. They consume **0% CPU** and are purely cosmetic (inflates load average to ~26). Fixing requires a kernel rebuild to disable unused subsystems.
 
-### init=/init Override
+### Initramfs Patches
 
-The Kirin 710 kernel has `init=/init` hardcoded in its built-in command line. Without the patch applied by `build-bootimg.sh`, this would cause the initramfs to loop back into itself instead of booting systemd. The script patches the stock ramdisk's init to override `init=/init` → `/sbin/init`.
+`build-bootimg.sh` downloads the stock [Halium initramfs](https://github.com/Halium/initramfs-tools-halium) and applies 4 patches required for Kirin 710:
+
+1. **init=/init override** — the kernel has `init=/init` hardcoded in its cmdline, which loops back into the initramfs. Patched to use `/sbin/init` (systemd).
+2. **switch_root** — stock Halium uses `run-init` which fails on Kirin 710. Replaced with `switch_root`.
+3. **validate_init()** — rewritten to check if init exists in rootfs instead of using `run-init -n`.
+4. **Non-ext4 userdata** — stock Halium assumes ext4 userdata and runs `e2fsck`. Patched to detect filesystem type and skip e2fsck for non-ext4.
+
+### WiFi MAC Randomization
+
+The Hi1102 driver assigns a random MAC address (last 3 bytes) on every boot, using the Huawei OUI `c0:11:02`. The `setup-device.sh` script locks the MAC via a systemd `.link` file. If you need a stable MAC for static DHCP, see the manual setup section above.
 
 ### 5 GHz WiFi
 
