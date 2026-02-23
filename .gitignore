@@ -42,8 +42,5 @@ resize2fs
 # Notes (contains passwords)
 NOTES.md
 
-# AI assistant session data
-.claude/
-
 # macOS
 .DS_Store
