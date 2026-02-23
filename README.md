@@ -50,10 +50,15 @@ This is the **first Droidian port for any Kirin device**. Unlike Qualcomm/MediaT
 - For CI builds: just push to GitHub (Actions workflow handles everything)
 
 ### Images to Download
-1. **Droidian rootfs** — from [droidian-images releases](https://github.com/droidian-images/droidian/releases) (API 33, arm64)
-2. **Halium system image** — get from [UBports CI](https://ci.ubports.com) (Halium 13 generic arm64 GSI)
 
-## Building
+You need 3 images (+ 1 optional):
+
+1. **Halium boot image** (`halium-boot.img`) — built from this repo (see [Building](#building-the-boot-image) below), or download from [GitHub Actions artifacts](../../actions)
+2. **Halium system image** — Halium 13 generic arm64 GSI from [UBports CI](https://ci.ubports.com/job/UBportsCommunityPortsJenkinsCI/job/ubports%252Fporting%252Fcommunity-ports%252Fjenkins-ci%252Fgeneric_arm64/job/halium-13.0/) — download the `halium_halium_arm64.tar.xz` artifact (extract to get `system.img`)
+3. **Droidian rootfs** — from [droidian-images releases](https://github.com/droidian-images/droidian/releases) — download `droidian-OFFICIAL-phosh-phone-rootfs-api33-arm64-*.zip` (extract to get `data/rootfs.img`)
+4. **Droidian devtools** (optional, recommended) — from the same [droidian-images releases](https://github.com/droidian-images/droidian/releases) — download `droidian-OFFICIAL-phosh-phone-devtools-api33-arm64-*.zip`
+
+## Building the Boot Image
 
 ### Option A: GitHub Actions (recommended)
 
@@ -81,14 +86,117 @@ Output: timestamped images in `out/` (e.g., `out/halium-boot-20260223-130716.img
 
 ## Flashing
 
-Boot into fastboot mode (hold Volume Down + Power while connecting USB):
+### Kirin 710 Partition Layout
+
+| Partition | Fastboot name | Description |
+|-----------|--------------|-------------|
+| `kernel_a` | `kernel` | Boot image (NOT called "boot" like on Qualcomm) |
+| `system_a` | `system` | Halium system image (Android GSI) |
+| `userdata` | `userdata` | User data (f2fs) — Droidian rootfs lives here as `/rootfs.img` |
+| `vendor_a` | `vendor` | Stock EMUI vendor (do NOT flash — contains WiFi firmware) |
+
+### Step 1: Flash system.img and boot image
+
+Boot into fastboot mode: hold **Volume Down + Power** while connecting USB, or run `adb reboot bootloader` from a running system.
 
 ```bash
-# Flash the kernel (boot partition is named "kernel" on Kirin 710, not "boot")
+# Verify device is detected
+fastboot devices
+
+# Flash the Halium system image (Android 13 GSI)
+fastboot flash system system.img
+
+# Flash the kernel/boot image
 fastboot flash kernel halium-boot.img
+
+# Reboot into the new system
+fastboot reboot
 ```
 
-For system.img and rootfs, flash the Droidian image from [droidian-images releases](https://github.com/droidian-images/droidian/releases) according to [Droidian installation docs](https://devices.droidian.org/).
+### Step 2: Push Droidian rootfs
+
+On first boot, the device will boot into the Halium initramfs. It will mount userdata but won't find `rootfs.img` yet, so it will start a telnet server on the USB interface. From your computer:
+
+```bash
+# Set up the USB network interface
+# macOS:
+sudo ifconfig en8 10.15.19.1 netmask 255.255.255.0 up
+# Linux:
+sudo ip addr add 10.15.19.1/24 dev usb0
+
+# Telnet into the initramfs
+telnet 10.15.19.82
+
+# Inside telnet, check that userdata is mounted
+mount | grep userdata
+# Should show: /dev/mmcblk0pXX on /tmpmnt type f2fs (...)
+
+# Exit telnet
+exit
+```
+
+Now push the rootfs from your computer using SCP or by extracting the zip:
+
+```bash
+# Extract the Droidian rootfs zip (contains rootfs.img)
+unzip droidian-OFFICIAL-phosh-phone-rootfs-api33-arm64-nightly_YYYYMMDD.zip
+
+# Push rootfs.img to the device via SCP (from the initramfs telnet/SSH)
+scp data/rootfs.img root@10.15.19.82:/tmpmnt/
+
+# If you downloaded devtools, also extract and push it
+unzip droidian-OFFICIAL-phosh-phone-devtools-api33-arm64-nightly_YYYYMMDD.zip
+scp data/devtools.img root@10.15.19.82:/tmpmnt/
+```
+
+Alternative — if SCP doesn't work from initramfs, use ADB:
+
+```bash
+# If the device shows up in adb
+adb push data/rootfs.img /tmpmnt/
+adb push data/devtools.img /tmpmnt/    # optional
+```
+
+### Step 3: Reboot
+
+```bash
+# From telnet on the device:
+reboot
+
+# Or from your computer:
+adb reboot
+```
+
+The device will now boot into Droidian. First boot takes 1-2 minutes as it resizes the rootfs.
+
+### Step 4: Verify boot
+
+After boot, connect via USB SSH:
+
+```bash
+# Set up USB network (if not already done)
+# macOS:
+sudo ifconfig en8 10.15.19.1 netmask 255.255.255.0 up
+# Linux:
+sudo ip addr add 10.15.19.1/24 dev usb0
+
+# SSH into Droidian
+ssh droidian@10.15.19.82
+# Default password: droidian
+```
+
+### Reflashing just the kernel
+
+After the initial setup, you only need to reflash the kernel when updating:
+
+```bash
+# From the device:
+sudo reboot bootloader
+
+# From your computer:
+fastboot flash kernel halium-boot.img
+fastboot reboot
+```
 
 ## Post-Flash Setup
 
@@ -295,7 +403,7 @@ The HiSilicon Hi1102 WiFi driver has several issues when used outside of Android
 
 ### Kernel Threads in D State
 
-After boot, ~26 kernel threads appear in D (uninterruptible sleep) state — modem, camera ISP, HISEE, etc. These are waiting for Android HAL services that aren't running. They consume **0% CPU** and are purely cosmetic (inflates load average to ~26). Fixing requires a kernel rebuild to disable unused subsystems.
+The `headless-minimal` branch disables ~30 unused kernel subsystems (modem, camera, audio, HISEE, sensors, etc.), reducing D-state threads from ~26 to 5 and idle load average from ~26 to ~5. The remaining D-state threads are essential (eMMC, TEE, blackbox/reboot infrastructure). The `main` branch has the stock config with all subsystems enabled.
 
 ### Initramfs Patches
 

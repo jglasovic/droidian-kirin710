@@ -26,22 +26,10 @@ out/
 
 # Ramdisk / initramfs (extracted and patched by build-bootimg.sh)
 halium-initramfs/
-rd-work/
-rd-work2/
-ramdisk-orig/
-gsi/
 halium_arm64.tar.xz
-zcat/
-wifi_fw/
 
-# Old patch scripts (no longer used)
-patch_*.py
-
-# Tools
-resize2fs
-
-# Notes (contains passwords)
-NOTES.md
+# Claude Code
+.claude/
 
 # macOS
 .DS_Store
