@@ -273,6 +273,34 @@ EXPORT_SYMBOL(usbaudio_nv_is_ready);
    implementation lived in blackbox (CONFIG_HISI_BB) */
 void rdr_syserr_process_for_ap(unsigned int a, unsigned long long b, unsigned long long c) {}
 EXPORT_SYMBOL(rdr_syserr_process_for_ap);
+
+/* lcdkit_disp.c calls this unconditionally;
+   implementation lived in inputhub/kirin710/sensor_feima.c (CONFIG_INPUTHUB_20) */
+void save_light_to_sensorhub(unsigned int p1, unsigned int p2) {}
+EXPORT_SYMBOL(save_light_to_sensorhub);
+
+/* drivers/hisi/memory_dump/kernel_dump.c and fs/pstore/platform.c call this;
+   implementation lived in mntn (CONFIG_HISILICON_PLATFORM_MAINTAIN) */
+int register_mntn_dump(int mod_id, unsigned int size, void **vaddr) { return -1; }
+EXPORT_SYMBOL(register_mntn_dump);
+
+/* drivers/hisi/hwzerohung/zrhung_transtation.c calls this;
+   implementation lived in mntn/hisi_bootup_keypoint.c (CONFIG_HISILICON_PLATFORM_MAINTAIN) */
+unsigned int get_boot_keypoint(void) { return 0; }
+EXPORT_SYMBOL(get_boot_keypoint);
+
+/* drivers/hisi/oae_fw_patch/do_mounts_oae_dm.c calls this;
+   implementation lived in mntn/hisi_bootup_keypoint.c (CONFIG_HISILICON_PLATFORM_MAINTAIN) */
+unsigned int get_last_boot_keypoint(void) { return 0; }
+EXPORT_SYMBOL(get_last_boot_keypoint);
+
+/* block/hisi-blk-flush.S calls this from precompiled assembly;
+   implementation lived in hisi_powerkey_spmi.c (CONFIG_HISI_POWERKEY_SPMI) */
+struct notifier_block;
+int hisi_powerkey_register_notifier(struct notifier_block *nb) { return 0; }
+EXPORT_SYMBOL(hisi_powerkey_register_notifier);
+int hisi_powerkey_unregister_notifier(struct notifier_block *nb) { return 0; }
+EXPORT_SYMBOL(hisi_powerkey_unregister_notifier);
 STUBEOF
 
 # Add stub object to hisi drivers Makefile
