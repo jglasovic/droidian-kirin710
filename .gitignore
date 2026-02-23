@@ -10,5 +10,40 @@ vendor/
 # Device info collected from device (not needed in repo)
 device_info/
 
+# Kernel source (large, has its own repo)
+kernel/
+
+# Binary images (too large for git, not source)
+*.img
+*.bin
+*.zip
+*.cpio.gz
+
+# Build artifacts
+kernel-artifact/
+kernel_build.log
+
+# Ramdisk / initramfs (extracted and patched by build-bootimg.sh)
+halium-initramfs/
+rd-work/
+rd-work2/
+ramdisk-orig/
+gsi/
+halium_arm64.tar.xz
+zcat/
+wifi_fw/
+
+# Old patch scripts (no longer used)
+patch_*.py
+
+# Tools
+resize2fs
+
+# Notes (contains passwords)
+NOTES.md
+
+# AI assistant session data
+.claude/
+
 # macOS
 .DS_Store

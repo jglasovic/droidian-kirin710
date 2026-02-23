@@ -9,34 +9,10 @@ on:
         default: false
         type: boolean
 
-env:
-  KERNEL_REPO:   https://github.com/Huawei-Dev/android_kernel_huawei_kirin710
-  KERNEL_BRANCH: android@13
-  CCACHE_DIR:    ${{ github.workspace }}/.ccache
-  CCACHE_SIZE:   5G
-
-  # Boot image parameters for Kirin 710 / SNE-LX1 (from BoardConfigCommon.mk)
-  BOARD_KERNEL_BASE:            "0x00078000"
-  BOARD_KERNEL_PAGESIZE:        "2048"
-  BOARD_KERNEL_OFFSET:          "0x00008000"
-  BOARD_RAMDISK_OFFSET:         "0x07b88000"
-  BOARD_TAGS_OFFSET:            "0x07988000"
-  BOARD_SECOND_OFFSET:          "0x00e88000"
-  BOARD_BOOTIMG_HEADER_VERSION: "1"
-  BOARD_KERNEL_CMDLINE: >-
-    loglevel=4 initcall_debug=n page_tracker=on
-    unmovable_isolate1=2:192M,3:224M,4:256M
-    printktimer=0xfff0a000,0x534,0x538
-    androidboot.init_fatal_reboot_target=recovery
-
-  # UBports CI — Halium 13 generic arm64 GSI (system + ramdisk)
-  UBPORTS_GSI_URL: >-
-    https://ci.ubports.com/job/UBportsCommunityPortsJenkinsCI/job/ubports%252Fporting%252Fcommunity-ports%252Fjenkins-ci%252Fgeneric_arm64/job/halium-13.0/836/artifact/halium_halium_arm64.tar.xz
-
 jobs:
   build:
     name: Build halium-boot.img + fetch system.img
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
@@ -44,174 +20,16 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Install dependencies
+      - name: Install mkbootimg
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            git bc bison flex libssl-dev make libc6-dev libncurses5-dev \
-            crossbuild-essential-arm64 python3 ccache zip unzip curl wget \
-            lzop device-tree-compiler android-tools-mkbootimg \
-            cpio
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-kernel-kirin710-${{ github.sha }}
-          restore-keys: ccache-kernel-kirin710-
-
-      - name: Configure ccache
-        run: |
-          ccache --max-size=${{ env.CCACHE_SIZE }}
-          ccache --zero-stats
-
-      - name: Checkout kernel source
-        run: |
-          git clone --depth=1 -b "${{ env.KERNEL_BRANCH }}" \
-            "${{ env.KERNEL_REPO }}" kernel
-
-      - name: Apply defconfig
-        run: |
-          cp kernel-configs/arch/arm64/configs/kirin710_defconfig \
-             kernel/arch/arm64/configs/kirin710_defconfig
-
-      - name: Patch kernel source
-        run: |
-          # linux/sched/debug.h missing from vendor tree — stub it out
-          mkdir -p kernel/include/linux/sched
-          printf '#ifndef _LINUX_SCHED_DEBUG_H\n#define _LINUX_SCHED_DEBUG_H\n#include <linux/sched.h>\n#endif\n' \
-            > kernel/include/linux/sched/debug.h
-
-          # Kirin 710 SoC platform headers (soc_sctrl_interface.h, global_ddr_map.h etc.)
-          PLATFORM=drivers/hisi/ap/platform/kirin710
-
-          # lcdkit hisi/: own dir + SoC platform headers
-          printf '\nccflags-y += -Idrivers/devkit/lcdkit/lcdkit1.0/core/common/hisi\n' \
-            >> kernel/drivers/devkit/lcdkit/lcdkit1.0/core/common/hisi/Makefile
-          printf '\nccflags-y += -I%s\n' "$PLATFORM" \
-            >> kernel/drivers/devkit/lcdkit/lcdkit1.0/core/common/hisi/Makefile
-
-          # tpkit core and 3_0: need tpkit root on include path
-          printf '\nccflags-y += -Idrivers/devkit/tpkit\n' \
-            >> kernel/drivers/devkit/tpkit/Makefile
-          printf '\nccflags-y += -Idrivers/devkit/tpkit/3_0\n' \
-            >> kernel/drivers/devkit/tpkit/3_0/Makefile
-
-          # tpkit/panel: each subdir needs tpkit root + itself
-          find kernel/drivers/devkit/tpkit/panel -name Makefile | while read mf; do
-            reldir="${mf#kernel/}"; reldir="${reldir%/Makefile}"
-            printf '\nccflags-y += -Idrivers/devkit/tpkit\n' >> "$mf"
-            printf '\nccflags-y += -I%s\n' "$reldir" >> "$mf"
-          done
-
-          # hisi/ddrc: self + SoC platform headers + libhwsecurec (securec.h)
-          # (libhwsecurec path is normally gated on CONFIG_HISI_BB in the Makefile)
-          printf '\nccflags-y += -Idrivers/hisi/ddrc\n' \
-            >> kernel/drivers/hisi/ddrc/Makefile
-          printf '\nccflags-y += -I%s\n' "$PLATFORM" \
-            >> kernel/drivers/hisi/ddrc/Makefile
-          printf '\nccflags-y += -Idrivers/hisi/tzdriver/libhwsecurec\n' \
-            >> kernel/drivers/hisi/ddrc/Makefile
-
-          # hisi/hi64xx_dsp: self (hi64xx_hifi_interface.h etc.)
-          printf '\nccflags-y += -Idrivers/hisi/hi64xx_dsp\n' \
-            >> kernel/drivers/hisi/hi64xx_dsp/Makefile
-
-          # hisi/hifi_dsp: self (hifi_lpp.h included via hifi_mailbox headers)
-          printf '\nccflags-y += -Idrivers/hisi/hifi_dsp\n' \
-            >> kernel/drivers/hisi/hifi_dsp/Makefile
-
-          # hisi/drmdriver, perf_ctrl, efuse: SoC platform headers (global_ddr_map.h)
-          for mf in \
-            kernel/drivers/hisi/drmdriver/Makefile \
-            kernel/drivers/hisi/perf_ctrl/Makefile \
-            kernel/drivers/hisi/efuse/Makefile; do
-            printf '\nccflags-y += -I%s\n' "$PLATFORM" >> "$mf"
-          done
-
-          # rdr_hisi_platform.h stub (CONFIG_HISI_BB=n): fix missing semicolon,
-          # make static inline to avoid multiple-definition linker errors
-          sed -i \
-            -e 's/^int get_module_dump_mem_addr(/static inline int get_module_dump_mem_addr(/' \
-            -e 's/{return -1}/{return -1;}/' \
-            -e 's/{return -1;};/{return -1;}/' \
-            kernel/include/linux/hisi/rdr_hisi_platform.h
+          sudo apt-get install -y --no-install-recommends android-tools-mkbootimg
 
       - name: Build kernel
-        env:
-          ARCH:          arm64
-          CROSS_COMPILE: aarch64-linux-gnu-
-          CC:            "ccache aarch64-linux-gnu-gcc"
-        run: |
-          set -o pipefail
-          cd kernel
-          KDIR=$(pwd)
-          make ARCH=arm64 kirin710_defconfig
-          make ARCH=arm64 \
-               CROSS_COMPILE=aarch64-linux-gnu- \
-               CC="ccache aarch64-linux-gnu-gcc" \
-               "BALONG_INC=-I${KDIR}/kernel" \
-               KCFLAGS="-Wno-error=maybe-uninitialized" \
-               -j$(nproc) Image.gz 2>&1 | tee ../kernel_build.log
-          echo "Kernel size: $(du -sh arch/arm64/boot/Image.gz)"
+        run: bash build-kernel.sh
 
-      - name: Download Halium GSI
-        run: |
-          echo "Downloading halium_halium_arm64.tar.xz from UBports CI..."
-          wget -q "${{ env.UBPORTS_GSI_URL }}" -O halium_arm64.tar.xz
-          echo "Download size: $(du -sh halium_arm64.tar.xz)"
-
-          echo "Contents of archive:"
-          tar -tJf halium_arm64.tar.xz
-
-      - name: Extract system.img and ramdisk
-        run: |
-          mkdir -p gsi
-          tar -xJf halium_arm64.tar.xz -C gsi/
-          echo "Extracted files:"
-          find gsi/ -type f | sort
-
-          # Droidian names it android-rootfs.img, UBports may use system.img
-          if [ -f gsi/system.img ]; then
-            cp gsi/system.img system.img
-          elif [ -f gsi/android-rootfs.img ]; then
-            cp gsi/android-rootfs.img system.img
-          else
-            echo "ERROR: no system.img or android-rootfs.img found in archive"
-            exit 1
-          fi
-          echo "system.img size: $(du -sh system.img)"
-
-          # Extract ramdisk — may be ramdisk.img or inside a boot.img
-          if [ -f gsi/ramdisk.img ]; then
-            cp gsi/ramdisk.img ramdisk.img
-          elif [ -f gsi/boot.img ]; then
-            echo "Found boot.img — extracting ramdisk..."
-            unpackbootimg -i gsi/boot.img -o bootimg_unpacked/
-            ls bootimg_unpacked/
-            cp bootimg_unpacked/*ramdisk* ramdisk.img
-          else
-            echo "ERROR: no ramdisk.img or boot.img found in archive"
-            exit 1
-          fi
-          echo "ramdisk.img size: $(du -sh ramdisk.img)"
-
-      - name: Build halium-boot.img
-        run: |
-          mkbootimg \
-            --kernel  kernel/arch/arm64/boot/Image.gz \
-            --ramdisk ramdisk.img \
-            --base            ${{ env.BOARD_KERNEL_BASE }} \
-            --pagesize        ${{ env.BOARD_KERNEL_PAGESIZE }} \
-            --kernel_offset   ${{ env.BOARD_KERNEL_OFFSET }} \
-            --ramdisk_offset  ${{ env.BOARD_RAMDISK_OFFSET }} \
-            --tags_offset     ${{ env.BOARD_TAGS_OFFSET }} \
-            --second_offset   ${{ env.BOARD_SECOND_OFFSET }} \
-            --header_version  ${{ env.BOARD_BOOTIMG_HEADER_VERSION }} \
-            --cmdline         "${{ env.BOARD_KERNEL_CMDLINE }}" \
-            --output          halium-boot.img
-
-          echo "halium-boot.img size: $(du -sh halium-boot.img)"
+      - name: Build boot image
+        run: bash build-bootimg.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -222,9 +40,6 @@ jobs:
             system.img
             kernel_build.log
           retention-days: 60
-
-      - name: ccache stats
-        run: ccache --show-stats
 
       - name: Create GitHub Release
         if: ${{ inputs.upload_release == true }}
