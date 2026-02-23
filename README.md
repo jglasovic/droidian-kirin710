@@ -31,6 +31,7 @@ This is the **first Droidian port for any Kirin device**. Unlike Qualcomm/MediaT
 │       └── kirin710_defconfig    # Customized kernel config
 ├── build-kernel.sh               # Build script: clone kernel, patch, compile
 ├── build-bootimg.sh              # Build script: download GSI, patch ramdisk, pack boot image
+├── setup-device.sh               # Post-flash setup: WiFi, vendor mount, SSH over network
 ├── collect_device_info.sh        # Dumps hardware info from device via ADB
 └── extract-vendor-sydney.sh      # Extracts vendor blobs from device via ADB
 ```
@@ -95,15 +96,30 @@ Then flash the Droidian rootfs according to [Droidian installation docs](https:/
 
 ## Post-Flash Setup
 
-After first boot, connect via USB and SSH:
+After first boot, connect via USB and set your computer's USB NCM IP:
 
 ```bash
-# Set USB NCM IP on your computer (the device gets 10.15.19.82)
 # On macOS:
 sudo ifconfig en8 10.15.19.1 netmask 255.255.255.0 up
 # On Linux:
 sudo ip addr add 10.15.19.1/24 dev usb0
+```
 
+### Automated Setup (recommended)
+
+Run the setup script from your computer — it configures everything over SSH:
+
+```bash
+bash setup-device.sh 10.15.19.82 "YOUR_WIFI_SSID" "YOUR_WIFI_PASSWORD"
+```
+
+Then reboot the device. After reboot, it will auto-connect to WiFi and SSH will be available over the network.
+
+### Manual Setup
+
+If you prefer to set things up manually, SSH into the device first:
+
+```bash
 ssh droidian@10.15.19.82
 # Default password: droidian
 ```
