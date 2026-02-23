@@ -1,15 +1,3 @@
-# Full repo clones (reference only, not committed here)
-repos/device_harry/
-repos/device_common/
-repos/kernel/
-repos/vendor_common/
-
-# Vendor blobs live in their own repo (android_vendor_huawei_sydney)
-vendor/
-
-# Device info collected from device (not needed in repo)
-device_info/
-
 # Kernel source (large, has its own repo)
 kernel/
 
