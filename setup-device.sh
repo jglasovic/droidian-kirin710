@@ -33,7 +33,7 @@ echo "[*] Connecting to ${DEVICE_USER}@${DEVICE_IP}..."
 ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no "${DEVICE_USER}@${DEVICE_IP}" "echo ${DEVICE_PASS} | sudo -S bash -s" << SETUP_EOF
 set -euo pipefail
 
-echo "[1/8] Setting up vendor partition mount..."
+echo "[1/10] Setting up vendor partition mount..."
 cat > /etc/systemd/system/android-system-vendor.mount << 'UNIT'
 [Unit]
 Description=Mount Android vendor partition
@@ -55,7 +55,7 @@ systemctl daemon-reload
 systemctl enable android-system-vendor.mount
 echo "    vendor mount: OK"
 
-echo "[2/8] Setting up Hi1102 WiFi init service..."
+echo "[2/10] Setting up Hi1102 WiFi init service..."
 cat > /etc/systemd/system/hisi-wifi-init.service << 'UNIT'
 [Unit]
 Description=Initialize Hi1102 WiFi
@@ -75,11 +75,11 @@ systemctl daemon-reload
 systemctl enable hisi-wifi-init.service
 echo "    wifi init: OK"
 
-echo "[3/8] Masking default wpa_supplicant (D-Bus mode causes CPU spin)..."
+echo "[3/10] Masking default wpa_supplicant (D-Bus mode causes CPU spin)..."
 systemctl mask wpa_supplicant.service 2>/dev/null || true
 echo "    wpa_supplicant masked: OK"
 
-echo "[4/8] Setting up wpa_supplicant config..."
+echo "[4/10] Setting up wpa_supplicant config..."
 mkdir -p /etc/wpa_supplicant
 cat > /etc/wpa_supplicant/wpa_supplicant.conf << WPACFG
 ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev
@@ -114,7 +114,7 @@ systemctl daemon-reload
 systemctl enable wpa_supplicant-wlan0.service
 echo "    wpa_supplicant (interface mode): OK"
 
-echo "[5/8] Installing and configuring dhcpcd..."
+echo "[5/10] Installing and configuring dhcpcd..."
 apt-get update -qq
 apt-get install -y --no-install-recommends dhcpcd5 2>&1 | tail -3
 if ! grep -q "allowinterfaces wlan0" /etc/dhcpcd.conf 2>/dev/null; then
@@ -122,7 +122,7 @@ if ! grep -q "allowinterfaces wlan0" /etc/dhcpcd.conf 2>/dev/null; then
 fi
 echo "    dhcpcd: OK"
 
-echo "[6/8] Setting up display-off service..."
+echo "[6/10] Setting up display-off service..."
 cat > /etc/systemd/system/display-off.service << 'UNIT'
 [Unit]
 Description=Turn off LCD display
@@ -140,7 +140,7 @@ systemctl daemon-reload
 systemctl enable display-off.service
 echo "    display-off: OK"
 
-echo "[7/8] Locking WiFi MAC address (Hi1102 randomizes on each boot)..."
+echo "[7/10] Locking WiFi MAC address (Hi1102 randomizes on each boot)..."
 cat > /etc/systemd/network/10-wlan0-mac.link << 'UNIT'
 [Match]
 OriginalName=wlan0
@@ -150,10 +150,138 @@ MACAddress=c0:11:02:e8:50:ea
 UNIT
 echo "    MAC locked to c0:11:02:e8:50:ea: OK"
 
-echo "[8/8] Disabling LXC Android container (not needed)..."
+echo "[8/10] Setting up USB gadget (SSH over USB fallback)..."
+cat > /etc/systemd/system/usb-gadget-trigger.service << 'UNIT'
+[Unit]
+Description=Trigger USB gadget mode via HiSilicon DWC3
+DefaultDependencies=no
+After=sys-kernel-config.mount
+Before=usb-rndis.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+
+[Install]
+WantedBy=sysinit.target
+UNIT
+
+cat > /etc/systemd/system/usb-rndis.service << 'UNIT'
+[Unit]
+Description=USB NCM Gadget (SSH over USB)
+DefaultDependencies=no
+After=sys-kernel-config.mount usb-gadget-trigger.service
+Wants=usb-gadget-trigger.service
+Before=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/usb-rndis-setup.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat > /usr/local/sbin/usb-rndis-setup.sh << 'SCRIPT'
+#!/bin/sh
+set -e
+exec > /tmp/usb-rndis.log 2>&1
+set -x
+
+GADGET=/sys/kernel/config/usb_gadget/g1
+
+# Ensure configfs is mounted
+if ! mount | grep -q "type configfs"; then
+    mount -t configfs none /sys/kernel/config 2>/dev/null || true
+fi
+
+# Wait for UDC to appear
+UDC=""
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    UDC=$(ls /sys/class/udc/ 2>/dev/null | head -1)
+    [ -n "$UDC" ] && break
+    sleep 1
+done
+if [ -z "$UDC" ]; then
+    echo "ERROR: No UDC after 15s" > /dev/kmsg 2>/dev/null || true
+    exit 1
+fi
+echo "UDC found: $UDC"
+
+# Tear down any existing gadget
+for g in /sys/kernel/config/usb_gadget/g_debug /sys/kernel/config/usb_gadget/g1; do
+    if [ -d "$g" ]; then
+        echo "" > $g/UDC 2>/dev/null || true
+        rm -f $g/configs/c.1/ncm.usb0 2>/dev/null || true
+        rmdir $g/configs/c.1/strings/0x409 2>/dev/null || true
+        rmdir $g/configs/c.1 2>/dev/null || true
+        rmdir $g/functions/ncm.usb0 2>/dev/null || true
+        rmdir $g/strings/0x409 2>/dev/null || true
+        rmdir $g 2>/dev/null || true
+    fi
+done
+
+mkdir -p $GADGET
+echo 0x1d6b > $GADGET/idVendor
+echo 0x0104 > $GADGET/idProduct
+echo 0x0100 > $GADGET/bcdDevice
+echo 0x0200 > $GADGET/bcdUSB
+mkdir -p $GADGET/strings/0x409
+echo "droidian-sne"  > $GADGET/strings/0x409/serialnumber
+echo "Droidian"      > $GADGET/strings/0x409/manufacturer
+echo "USB Network"   > $GADGET/strings/0x409/product
+mkdir -p $GADGET/functions/ncm.usb0
+echo "DE:AD:BE:EF:00:01" > $GADGET/functions/ncm.usb0/host_addr
+echo "DE:AD:BE:EF:00:02" > $GADGET/functions/ncm.usb0/dev_addr
+mkdir -p $GADGET/configs/c.1/strings/0x409
+echo "CDC-NCM" > $GADGET/configs/c.1/strings/0x409/configuration
+echo 500       > $GADGET/configs/c.1/MaxPower
+ln -s $GADGET/functions/ncm.usb0 $GADGET/configs/c.1/
+
+echo "$UDC" > $GADGET/UDC
+echo "USB CDC-NCM gadget on $UDC" > /dev/kmsg 2>/dev/null || true
+
+# Wait for interface
+sleep 2
+IFACE=""
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    IFACE=$(ip link show 2>/dev/null | grep -i "de:ad:be:ef:00:02" -B1 | head -1 | sed "s/^[0-9]*: \([^:@]*\).*/\1/")
+    [ -n "$IFACE" ] && break
+    sleep 1
+done
+
+if [ -n "$IFACE" ]; then
+    ip link set "$IFACE" up
+    ip addr flush dev "$IFACE" 2>/dev/null || true
+    ip addr add 10.15.19.82/24 dev "$IFACE"
+    echo "USB interface $IFACE up at 10.15.19.82/24" > /dev/kmsg 2>/dev/null || true
+else
+    echo "WARNING: NCM interface not found" > /dev/kmsg 2>/dev/null || true
+    exit 1
+fi
+SCRIPT
+chmod +x /usr/local/sbin/usb-rndis-setup.sh
+
+# udev rule: restart usb-rndis when USB cable is plugged in
+cat > /etc/udev/rules.d/99-usb-gadget.rules << 'UDEV'
+ACTION=="add", SUBSYSTEM=="udc", RUN+="/bin/systemctl restart usb-rndis.service"
+UDEV
+
+systemctl daemon-reload
+systemctl enable usb-gadget-trigger.service
+systemctl enable usb-rndis.service
+echo "    usb-gadget + udev rule: OK"
+
+echo "[9/10] Disabling LXC Android container (not needed)..."
 systemctl stop lxc@android 2>/dev/null || true
 systemctl mask lxc@android 2>/dev/null || true
 echo "    lxc masked: OK"
+
+echo "[10/10] Masking android_boot_completed (no container)..."
+systemctl mask android_boot_completed.service 2>/dev/null || true
+echo "    android_boot_completed masked: OK"
 
 echo ""
 echo "=== Setup complete ==="
