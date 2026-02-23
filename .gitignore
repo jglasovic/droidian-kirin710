@@ -8,7 +8,6 @@ kernel/
 *.cpio.gz
 
 # Build artifacts
-kernel-artifact/
 kernel_build.log
 out/
 
