@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    name: Build halium-boot.img + fetch system.img
+    name: Build halium-boot.img
     runs-on: ubuntu-24.04-arm
 
     steps:
@@ -19,11 +19,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
-      - name: Install mkbootimg
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends android-tools-mkbootimg
 
       - name: Build kernel
         run: bash build-kernel.sh
@@ -34,10 +29,9 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: halium-sydney-${{ github.run_number }}
+          name: halium-boot-${{ github.run_number }}
           path: |
             halium-boot.img
-            system.img
             kernel_build.log
           retention-days: 60
 
@@ -51,16 +45,14 @@ jobs:
             ## Halium for Huawei Mate 20 Lite (SNE-LX1 / sydney)
 
             **Kernel:** 4.9.337 (android@13)
-            **System:** Halium 13 generic arm64 GSI (UBports CI #836)
 
             ### Flash
             ```
-            fastboot flash kernel  halium-boot.img
-            fastboot flash system  system.img
+            fastboot flash kernel halium-boot.img
             ```
-            Then flash Droidian rootfs from https://github.com/droidian-images/droidian/releases
-          files: |
-            halium-boot.img
-            system.img
+
+            For system.img and rootfs, download the Droidian image from:
+            https://github.com/droidian-images/droidian/releases
+          files: halium-boot.img
           draft: false
           prerelease: true

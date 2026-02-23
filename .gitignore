@@ -22,6 +22,7 @@ kernel/
 # Build artifacts
 kernel-artifact/
 kernel_build.log
+out/
 
 # Ramdisk / initramfs (extracted and patched by build-bootimg.sh)
 halium-initramfs/

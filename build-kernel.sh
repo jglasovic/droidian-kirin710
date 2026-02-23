@@ -252,3 +252,9 @@ make ARCH=arm64 \
 echo ""
 echo "[OK] Kernel built: $(du -sh arch/arm64/boot/Image.gz)"
 cd "$WORK_DIR"
+
+# ── Save timestamped copy ─────────────────────────────────────────────────
+BUILD_TAG="$(date +%Y%m%d-%H%M%S)"
+mkdir -p out
+cp kernel/arch/arm64/boot/Image.gz "out/Image-${BUILD_TAG}.gz"
+echo "[OK] Saved: out/Image-${BUILD_TAG}.gz"
