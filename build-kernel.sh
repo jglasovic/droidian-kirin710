@@ -229,11 +229,54 @@ sed -i 's|#include "audit.h"|#include "include/audit.h"|' \
   kernel/security/selinux/hooks.c
 
 # rdr_hisi_platform.h stub: fix missing semicolon in #else stub body
-# (do NOT add static inline to the #if CONFIG_HISI_BB forward declaration on line 80)
+# and add static inline to get_module_dump_mem_addr stub (prevents multiple-definition linker errors)
 sed -i \
   -e 's/{return -1}/{return -1;}/' \
   -e 's/{return -1;};/{return -1;}/' \
+  -e 's/^int get_module_dump_mem_addr/static inline int get_module_dump_mem_addr/' \
   kernel/include/linux/hisi/rdr_hisi_platform.h
+
+# sound/usb: usbaudio_mailbox/ and hifi/ depend on HIFI mailbox; make conditional
+sed -i 's|misc/ usx2y/ caiaq/ 6fire/ hiface/ bcd2000/ usbaudio_mailbox/ hifi/|misc/ usx2y/ caiaq/ 6fire/ hiface/ bcd2000/\nobj-$(CONFIG_HIFI_MAILBOX) += usbaudio_mailbox/ hifi/|' \
+  kernel/sound/usb/Makefile
+
+# Stub file for symbols removed by disabling audio/blackbox subsystems
+# These functions are called unconditionally from core kernel code
+cat > kernel/drivers/hisi/headless_stubs.c << 'STUBEOF'
+#include <linux/module.h>
+#include <linux/types.h>
+
+/* sound/core/pcm_native.c and pcm_lib.c call these unconditionally;
+   implementations lived in hisi_pcm_hifi.c (disabled with HIFI_MAILBOX) */
+void snd_pcm_reset_pre_time(void) {}
+EXPORT_SYMBOL(snd_pcm_reset_pre_time);
+void snd_pcm_print_timeout(void) {}
+EXPORT_SYMBOL(snd_pcm_print_timeout);
+
+/* sound/usb/card.c calls these unconditionally;
+   implementations lived in sound/usb/hifi/ (disabled with HIFI_MAILBOX) */
+int usbaudio_ctrl_controller_switch(void *p1, unsigned int p2, unsigned int p3) { return 0; }
+EXPORT_SYMBOL(usbaudio_ctrl_controller_switch);
+void usbaudio_ctrl_set_chip(void *p) {}
+EXPORT_SYMBOL(usbaudio_ctrl_set_chip);
+void usbaudio_ctrl_disconnect(void) {}
+EXPORT_SYMBOL(usbaudio_ctrl_disconnect);
+void usbaudio_ctrl_wake_up(void *p) {}
+EXPORT_SYMBOL(usbaudio_ctrl_wake_up);
+
+/* dwc3-hisi.c calls this when CONFIG_SND is enabled;
+   implementation lived in sound/usb/hifi/ */
+int usbaudio_nv_is_ready(void) { return 1; }
+EXPORT_SYMBOL(usbaudio_nv_is_ready);
+
+/* drivers/mmc/core/hisi_mmc_bkops.c calls this;
+   implementation lived in blackbox (CONFIG_HISI_BB) */
+void rdr_syserr_process_for_ap(unsigned int a, unsigned long long b, unsigned long long c) {}
+EXPORT_SYMBOL(rdr_syserr_process_for_ap);
+STUBEOF
+
+# Add stub object to hisi drivers Makefile
+printf '\nobj-y += headless_stubs.o\n' >> kernel/drivers/hisi/Makefile
 
 # ── Build kernel ──────────────────────────────────────────────────────────────
 echo "[*] Building kernel..."
