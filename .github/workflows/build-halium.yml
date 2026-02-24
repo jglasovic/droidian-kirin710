@@ -33,17 +33,6 @@ jobs:
         env:
           KERNEL_BRANCH: ${{ inputs.kernel_branch }}
 
-      - name: Download system.img
-        run: |
-          echo "[*] Downloading halium_arm64.tar.xz from own release..."
-          curl -fSL --retry 3 -o halium_arm64.tar.xz \
-            "https://github.com/${{ github.repository }}/releases/download/upstream-images/halium_arm64.tar.xz"
-          echo "[*] Extracting system.img..."
-          tar xf halium_arm64.tar.xz system/var/lib/lxc/android/android-rootfs.img
-          mv system/var/lib/lxc/android/android-rootfs.img system.img
-          rm -rf system halium_arm64.tar.xz
-          echo "[OK] system.img: $(du -sh system.img | cut -f1)"
-
       - name: Download rootfs.img
         run: |
           echo "[*] Downloading rootfs.zip from own release..."
@@ -60,13 +49,6 @@ jobs:
         with:
           name: halium-boot
           path: halium-boot.img
-          retention-days: 60
-
-      - name: Upload system.img
-        uses: actions/upload-artifact@v4
-        with:
-          name: system
-          path: system.img
           retention-days: 60
 
       - name: Upload rootfs.img
@@ -91,9 +73,6 @@ jobs:
             ```
             fastboot flash kernel halium-boot.img
             ```
-
-            For system.img and rootfs, download the Droidian image from:
-            https://github.com/droidian-images/droidian/releases
           files: halium-boot.img
           draft: false
           prerelease: true
