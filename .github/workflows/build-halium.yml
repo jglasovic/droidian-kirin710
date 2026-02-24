@@ -35,9 +35,11 @@ jobs:
 
       - name: Download rootfs.img
         run: |
-          echo "[*] Downloading rootfs.zip from own release..."
-          curl -fSL --retry 3 -o rootfs.zip \
-            "https://github.com/${{ github.repository }}/releases/download/upstream-images/rootfs.zip"
+          echo "[*] Finding latest Droidian rootfs release..."
+          ROOTFS_URL=$(curl -s https://api.github.com/repos/droidian-images/droidian/releases/latest \
+            | python3 -c "import sys,json; assets=json.load(sys.stdin)['assets']; print(next(a['browser_download_url'] for a in assets if 'rootfs-api33-arm64' in a['name'] and a['name'].endswith('.zip')))")
+          echo "[*] Downloading $ROOTFS_URL..."
+          curl -fSL --retry 3 -o rootfs.zip "$ROOTFS_URL"
           echo "[*] Extracting rootfs.img..."
           unzip -o rootfs.zip "data/rootfs.img" -d .
           mv data/rootfs.img rootfs.img
