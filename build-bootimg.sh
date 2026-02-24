@@ -70,22 +70,25 @@ if ! grep -q "switch_root" "$INITRAMFS_DIR/init" 2>/dev/null; then
   INIT="$INITRAMFS_DIR/init"
   HALIUM="$INITRAMFS_DIR/scripts/halium"
 
-  # Patch 1: Kirin 710 init override — insert after cmdline parsing "done"
-  sed -i '/^done$/a\
-\
-# Override init: the Kirin 710 kernel has init=\/init built-in in its cmdline.\
-# \/init refers to the initramfs itself, NOT the Droidian rootfs init.\
-# Always use \/sbin\/init (systemd) for the real rootfs.\
-if [ "$init" = "\/init" ] || [ -z "$init" ]; then\
-\tinit=\/sbin\/init\
-fi' "$INIT"
-
+  # Patch 1: Kirin 710 init override
   # Patch 2+3: Replace run-init with switch_root (run-init fails on Kirin 710)
   python3 - "$INIT" << 'PYEOF'
 import sys
 path = sys.argv[1]
 with open(path) as f:
     content = f.read()
+
+# Patch 1: Insert init override after the cmdline parsing loop (esac\ndone)
+# The kernel has init=/init hardcoded which loops back to initramfs.
+init_override = '''
+# Override init: the Kirin 710 kernel has init=/init built-in in its cmdline.
+# /init refers to the initramfs itself, NOT the Droidian rootfs init.
+# Always use /sbin/init (systemd) for the real rootfs.
+if [ "$init" = "/init" ] || [ -z "$init" ]; then
+\tinit=/sbin/init
+fi'''
+content = content.replace('\tesac\ndone\n', '\tesac\ndone\n' + init_override + '\n', 1)
+print("  - init: added init=/sbin/init override after cmdline parsing")
 
 # Replace validate_init() body
 content = content.replace(
