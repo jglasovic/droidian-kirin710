@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # build-kernel.sh — build Halium kernel for Kirin 710
-# Run on any ARM64 Ubuntu machine (Colima, GitHub Actions, bare metal):
+# Run on any Ubuntu machine (native ARM64 or x86_64 cross-compile):
 #   bash build-kernel.sh
 #
 # Optional env vars:
@@ -30,6 +30,11 @@ if [ "${SKIP_DEPS:-}" != "1" ]; then
     gcc binutils \
     python3 ccache zip unzip curl wget lzop \
     cpio 2>&1 | tail -5
+  # Install cross-compiler if not on ARM64
+  if [ "$(uname -m)" != "aarch64" ]; then
+    $SUDO apt-get install -y --no-install-recommends \
+      gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu 2>&1 | tail -3
+  fi
 fi
 
 # ── Clone kernel if not already present ──────────────────────────────────────
@@ -46,10 +51,14 @@ cd kernel
 KDIR=$(pwd)
 
 export ARCH=arm64
+# Cross-compile if not on ARM64
+if [ "$(uname -m)" != "aarch64" ]; then
+  export CROSS_COMPILE=aarch64-linux-gnu-
+fi
 
-make ARCH=arm64 kirin710_defconfig
+make ARCH=arm64 ${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE} kirin710_defconfig
 
-make ARCH=arm64 \
+make ARCH=arm64 ${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE} \
   "BALONG_INC=-I${KDIR}/kernel" \
   KCFLAGS="-Wno-error=maybe-uninitialized -Wno-error=address -Wno-error=sizeof-pointer-memaccess -Wno-error=misleading-indentation" \
   -j$(nproc) Image.gz 2>&1 | tee "${WORK_DIR}/kernel_build.log"
