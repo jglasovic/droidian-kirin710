@@ -17,11 +17,10 @@ jobs:
           echo "[*] Downloading halium_halium_arm64.tar.xz from UBports CI..."
           curl -fSL --retry 3 -o halium_arm64.tar.xz \
             "https://ci.ubports.com/job/UBportsCommunityPortsJenkinsCI/job/ubports%252Fporting%252Fcommunity-ports%252Fjenkins-ci%252Fgeneric_arm64/job/halium-13.0/lastSuccessfulBuild/artifact/halium_halium_arm64.tar.xz"
-          echo "[*] Listing archive contents..."
-          tar tf halium_arm64.tar.xz
-          echo "[*] Extracting system.img..."
-          tar xf halium_arm64.tar.xz --wildcards '*/system.img' --strip-components=100 || tar xf halium_arm64.tar.xz system.img
-          rm halium_arm64.tar.xz
+          echo "[*] Extracting android-rootfs.img as system.img..."
+          tar xf halium_arm64.tar.xz system/var/lib/lxc/android/android-rootfs.img
+          mv system/var/lib/lxc/android/android-rootfs.img system.img
+          rm -rf system halium_arm64.tar.xz
           echo "[OK] system.img: $(du -sh system.img | cut -f1)"
 
       - name: Download rootfs.img from Droidian releases
