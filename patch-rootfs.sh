@@ -35,6 +35,8 @@ trap cleanup EXIT
 
 # ── 1. Enable ADB over USB ──────────────────────────────────────────────────
 echo "[1/5] Enabling ADB over USB..."
+# Mask usb-rndis (NCM gadget) — it takes over the USB gadget config and blocks ADB
+ln -sf /dev/null "$MNT/etc/systemd/system/usb-rndis.service"
 # Replace TCP-only override with one that adds TCP alongside USB
 mkdir -p "$MNT/etc/systemd/system/adbd.service.d"
 cat > "$MNT/etc/systemd/system/adbd.service.d/tcp.conf" << 'UNIT'
