@@ -141,14 +141,19 @@ systemctl enable display-off.service
 echo "    display-off: OK"
 
 echo "[7/10] Locking WiFi MAC address (Hi1102 randomizes on each boot)..."
-cat > /etc/systemd/network/10-wlan0-mac.link << 'UNIT'
+WLAN_MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null || echo "")
+if [ -z "$WLAN_MAC" ] || [ "$WLAN_MAC" = "00:00:00:00:00:00" ]; then
+  echo "    WARNING: could not read wlan0 MAC, skipping"
+else
+  cat > /etc/systemd/network/10-wlan0-mac.link << UNIT
 [Match]
 OriginalName=wlan0
 
 [Link]
-MACAddress=c0:11:02:e8:50:ea
+MACAddress=${WLAN_MAC}
 UNIT
-echo "    MAC locked to c0:11:02:e8:50:ea: OK"
+  echo "    MAC locked to ${WLAN_MAC}: OK"
+fi
 
 echo "[8/10] Setting up USB gadget (SSH over USB fallback)..."
 cat > /etc/systemd/system/usb-gadget-trigger.service << 'UNIT'
