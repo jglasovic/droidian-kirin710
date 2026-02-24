@@ -24,7 +24,8 @@ This is the **first Droidian port for any Kirin device**.
 ```
 .
 ├── .github/workflows/
-│   └── build-halium.yml              # CI — builds boot image, patches and uploads rootfs
+│   ├── build-halium.yml              # CI — builds halium-boot.img (kernel + initramfs)
+│   └── build-rootfs.yml              # CI — downloads, patches and uploads rootfs.img
 ├── build-bootimg.sh                  # Download kernel + Halium initramfs, patch for Kirin 710, pack boot image
 ├── patch-rootfs.sh                   # Patch rootfs.img with Kirin 710 device config (ADB, vendor, WiFi init)
 └── setup-device.sh                   # Post-flash WiFi credentials setup over ADB
@@ -40,8 +41,9 @@ This is the **first Droidian port for any Kirin device**.
 
 ### GitHub Actions (recommended)
 
-1. Run the **Build Halium** workflow — select a kernel branch and optionally publish a release.
-2. Download the 2 artifacts: `halium-boot` and `rootfs`.
+1. Run **Build rootfs.img** — downloads and patches the Droidian rootfs (cached, only re-runs when upstream or patch changes).
+2. Run **Build halium-boot.img** — select a kernel branch and optionally publish a release.
+3. Download the artifacts: `halium-boot` and `rootfs`.
 
 ### Local Build
 
