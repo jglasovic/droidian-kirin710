@@ -9,7 +9,7 @@ This is the **first Droidian port for any Kirin device**.
 | Feature | Status |
 |---------|--------|
 | Boot to Droidian | Working |
-| ADB over USB | Working |
+| ADB (USB + TCP) | Working |
 | WiFi (2.4 GHz + 5 GHz) | Working (with workarounds) |
 | SSH over WiFi | Working |
 | Display | Working (can be turned off for headless use) |
@@ -63,31 +63,45 @@ Boot into fastboot: hold **Volume Down + Power** while connecting USB.
 
 ```bash
 fastboot flash kernel halium-boot.img
-fastboot reboot
 ```
 
-On first boot the initramfs will start a telnet server over USB (no rootfs yet). Push the rootfs via ADB or telnet:
+On first boot the initramfs will start a telnet server over USB (no rootfs yet). Set up the USB network and push the rootfs:
 
 ```bash
-adb push rootfs.img /tmpmnt/
-adb reboot
+# Set up USB network
+# macOS:
+sudo ifconfig en8 10.15.19.1 netmask 255.255.255.0 up
+# Linux:
+sudo ip addr add 10.15.19.1/24 dev usb0
+
+# Push rootfs
+scp rootfs.img root@10.15.19.82:/tmpmnt/
+
+# Reboot
+telnet 10.15.19.82
+# then: reboot
 ```
 
-First boot takes 1-2 minutes (rootfs resize). After that, ADB over USB works automatically:
+First boot takes 1-2 minutes (rootfs resize). After that, ADB works automatically:
 
 ```bash
+# Over USB:
 adb shell
+
+# Over WiFi (after setup):
+adb connect <device-ip>:5555
 ```
 
 ## Post-Flash Setup
 
-The rootfs comes pre-configured with ADB, vendor mount, and WiFi init. Run the setup script to add WiFi credentials:
+The rootfs comes pre-configured with ADB, vendor mount, and WiFi init. Connect via USB and run the setup script to add WiFi credentials:
 
 ```bash
 bash setup-device.sh "YOUR_WIFI_SSID" "YOUR_WIFI_PASSWORD"
+adb reboot
 ```
 
-Reboot the device (`adb reboot`). After reboot it will auto-connect to WiFi.
+After reboot the device will auto-connect to WiFi.
 
 ## Links
 
