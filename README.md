@@ -9,7 +9,7 @@ This is the **first Droidian port for any Kirin device**.
 | Feature | Status |
 |---------|--------|
 | Boot to Droidian | Working |
-| SSH (USB NCM) | Working |
+| ADB over USB | Working |
 | WiFi (2.4 GHz + 5 GHz) | Working (with workarounds) |
 | SSH over WiFi | Working |
 | Display | Working (can be turned off for headless use) |
@@ -24,10 +24,11 @@ This is the **first Droidian port for any Kirin device**.
 ```
 .
 ├── .github/workflows/
-│   ├── build-halium.yml              # CI — builds boot image, uploads all 3 images as artifacts
-│   └── update-upstream-images.yml    # Mirror upstream system.img & rootfs.img to a pinned release
+│   ├── build-halium.yml              # CI — builds boot image, patches and uploads rootfs
+│   └── update-upstream-images.yml    # Mirror upstream rootfs.zip to a pinned release
 ├── build-bootimg.sh                  # Download kernel + Halium initramfs, patch for Kirin 710, pack boot image
-└── setup-device.sh                   # Post-flash device setup (WiFi, vendor mount, USB gadget, etc.)
+├── patch-rootfs.sh                   # Patch rootfs.img with Kirin 710 device config (ADB, vendor, WiFi init)
+└── setup-device.sh                   # Post-flash WiFi credentials setup over ADB
 ```
 
 ## Related Repositories
@@ -40,9 +41,9 @@ This is the **first Droidian port for any Kirin device**.
 
 ### GitHub Actions (recommended)
 
-1. Run the **Update upstream images** workflow once to mirror `system.img` and `rootfs.img` to the `upstream-images` release.
+1. Run the **Update upstream images** workflow once to mirror `rootfs.zip` to the `upstream-images` release.
 2. Run the **Build Halium** workflow — select a kernel branch and optionally publish a release.
-3. Download the 3 artifacts: `halium-boot`, `system`, `rootfs`.
+3. Download the 2 artifacts: `halium-boot` and `rootfs`.
 
 ### Local Build
 
@@ -61,43 +62,32 @@ Output: timestamped images in `out/` with a `halium-boot.img` symlink to the lat
 Boot into fastboot: hold **Volume Down + Power** while connecting USB.
 
 ```bash
-fastboot flash system system.img
 fastboot flash kernel halium-boot.img
 fastboot reboot
 ```
 
-On first boot the initramfs will start a telnet server over USB (no rootfs yet). Push the rootfs:
+On first boot the initramfs will start a telnet server over USB (no rootfs yet). Push the rootfs via ADB or telnet:
 
 ```bash
-# Set up USB network
-# macOS:
-sudo ifconfig en8 10.15.19.1 netmask 255.255.255.0 up
-# Linux:
-sudo ip addr add 10.15.19.1/24 dev usb0
-
-# Push rootfs
-scp rootfs.img root@10.15.19.82:/tmpmnt/
-
-# Reboot
-telnet 10.15.19.82
-# then: reboot
+adb push rootfs.img /tmpmnt/
+adb reboot
 ```
 
-First boot takes 1-2 minutes (rootfs resize). After that, SSH in:
+First boot takes 1-2 minutes (rootfs resize). After that, ADB over USB works automatically:
 
 ```bash
-ssh droidian@10.15.19.82   # password: droidian
+adb shell
 ```
 
 ## Post-Flash Setup
 
-Run the setup script from your computer — it configures vendor mount, WiFi (Hi1102), DHCP, USB gadget, and more over SSH:
+The rootfs comes pre-configured with ADB, vendor mount, and WiFi init. Run the setup script to add WiFi credentials:
 
 ```bash
-bash setup-device.sh 10.15.19.82 "YOUR_WIFI_SSID" "YOUR_WIFI_PASSWORD"
+bash setup-device.sh "YOUR_WIFI_SSID" "YOUR_WIFI_PASSWORD"
 ```
 
-Reboot the device. After reboot it will auto-connect to WiFi.
+Reboot the device (`adb reboot`). After reboot it will auto-connect to WiFi.
 
 ## Links
 

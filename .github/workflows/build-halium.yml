@@ -44,6 +44,9 @@ jobs:
           rm -rf data rootfs.zip
           echo "[OK] rootfs.img: $(du -sh rootfs.img | cut -f1)"
 
+      - name: Patch rootfs for Kirin 710
+        run: sudo bash patch-rootfs.sh
+
       - name: Upload halium-boot.img
         uses: actions/upload-artifact@v4
         with:
