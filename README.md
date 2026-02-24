@@ -24,17 +24,29 @@ This is the **first Droidian port for any Kirin device**. Unlike Qualcomm/MediaT
 ```
 .
 ├── .github/workflows/
-│   └── build-halium.yml          # GitHub Actions CI — builds kernel + boot image
-├── device-tree/sydney/           # Android device tree (BoardConfig, manifests, overlays)
-├── kernel-configs/
-│   └── arch/arm64/configs/
-│       └── kirin710_defconfig    # Customized kernel config
-├── build-kernel.sh               # Build script: clone kernel, patch, compile
-├── build-bootimg.sh              # Build script: download Halium initramfs, patch for Kirin 710, pack boot image
-├── setup-device.sh               # Post-flash setup: WiFi, vendor mount, SSH over network
-├── collect_device_info.sh        # Dumps hardware info from device via ADB
-└── extract-vendor-sydney.sh      # Extracts vendor blobs from device via ADB
+│   └── build-halium.yml    # GitHub Actions CI — builds kernel + boot image
+├── build-kernel.sh         # Build script: clone kernel fork, compile
+├── build-bootimg.sh        # Build script: download Halium initramfs, patch for Kirin 710, pack boot image
+├── setup-device.sh         # Post-flash setup: WiFi, vendor mount, SSH over network
+└── kernel/                 # Kernel source (cloned at build time from fork)
 ```
+
+### Kernel Fork
+
+The kernel source lives in a separate fork: [jglasovic/android_kernel_huawei_kirin710](https://github.com/jglasovic/android_kernel_huawei_kirin710). All kernel patches (include path fixes, header fixes, stubs) and defconfigs are maintained there. Available branches:
+
+| Branch | Description |
+|--------|-------------|
+| `headless-kirin710` (default) | Minimal headless server config — disables camera, audio, sensors, modem; low idle load |
+| `full-ui-kirin710` | Full UI config — all subsystems enabled (camera, audio, sensors, modem) |
+
+To build with a different kernel config, set `KERNEL_BRANCH` before building:
+
+```bash
+KERNEL_BRANCH=full-ui-kirin710 bash build-kernel.sh
+```
+
+Or select the branch from the GitHub Actions workflow dispatch UI.
 
 ## Prerequisites
 
@@ -62,8 +74,8 @@ You need 3 images (+ 1 optional):
 
 ### Option A: GitHub Actions (recommended)
 
-Push to the repo and trigger the `Build Halium` workflow manually from the Actions tab. It runs on a native ARM64 runner and:
-1. Runs `build-kernel.sh` — clones kernel, patches ~40 broken include paths, compiles
+Trigger the `Build Halium` workflow manually from the Actions tab. Select the kernel branch (`headless-kirin710` or `full-ui-kirin710`) and run. It uses a native ARM64 runner and:
+1. Runs `build-kernel.sh` — clones the selected kernel fork branch, compiles
 2. Runs `build-bootimg.sh` — downloads Halium initramfs, applies Kirin 710 patches (switch_root, init override, non-ext4 userdata), packs boot image
 3. Uploads `halium-boot.img` artifact
 
@@ -403,7 +415,7 @@ The HiSilicon Hi1102 WiFi driver has several issues when used outside of Android
 
 ### Kernel Threads in D State
 
-The `headless-minimal` branch disables ~30 unused kernel subsystems (modem, camera, audio, HISEE, sensors, etc.), reducing D-state threads from ~26 to 5 and idle load average from ~26 to ~5. The remaining D-state threads are essential (eMMC, TEE, blackbox/reboot infrastructure). The `main` branch has the stock config with all subsystems enabled.
+The `headless-kirin710` kernel branch disables ~30 unused kernel subsystems (modem, camera, audio, HISEE, sensors, etc.), reducing D-state threads from ~26 to 5 and idle load average from ~26 to ~5. The remaining D-state threads are essential (eMMC, TEE, blackbox/reboot infrastructure). The `full-ui-kirin710` branch has all subsystems enabled.
 
 ### Initramfs Patches
 
@@ -438,7 +450,7 @@ Other Kirin 710 devices in the "sydney" family (P Smart+ 2019, Nova 3i, Honor 8X
 
 ## Links
 
-- **Kernel source**: [Huawei-Dev/android_kernel_huawei_kirin710](https://github.com/Huawei-Dev/android_kernel_huawei_kirin710) (branch `android@13`)
+- **Kernel fork**: [jglasovic/android_kernel_huawei_kirin710](https://github.com/jglasovic/android_kernel_huawei_kirin710) (upstream: [Huawei-Dev](https://github.com/Huawei-Dev/android_kernel_huawei_kirin710), branch `android@13`)
 - **Droidian**: [droidian.org](https://droidian.org/)
 - **Halium**: [halium.org](https://halium.org/)
 - **Droidian images**: [droidian-images/droidian](https://github.com/droidian-images/droidian/releases)

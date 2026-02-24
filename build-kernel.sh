@@ -4,13 +4,17 @@
 #   bash build-kernel.sh
 #
 # Optional env vars:
-#   SKIP_DEPS=1    — skip apt dependency installation
-#   KERNEL_DIR=... — use existing kernel source directory
+#   SKIP_DEPS=1        — skip apt dependency installation
+#   KERNEL_DIR=...     — use existing kernel source directory
+#   KERNEL_BRANCH=...  — kernel fork branch (default: headless-kirin710)
+#                        Available branches:
+#                          headless-kirin710  — minimal headless server config
+#                          full-ui-kirin710   — full UI config (camera, audio, sensors)
 set -euo pipefail
 
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KERNEL_REPO="https://github.com/jglasovic/android_kernel_huawei_kirin710"
-KERNEL_BRANCH="headless-kirin710"
+KERNEL_BRANCH="${KERNEL_BRANCH:-headless-kirin710}"
 
 cd "$WORK_DIR"
 

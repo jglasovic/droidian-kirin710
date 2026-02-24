@@ -3,6 +3,14 @@ name: Build Halium for SNE-LX1 (sydney / Kirin 710)
 on:
   workflow_dispatch:
     inputs:
+      kernel_branch:
+        description: 'Kernel fork branch'
+        required: false
+        default: 'headless-kirin710'
+        type: choice
+        options:
+          - headless-kirin710
+          - full-ui-kirin710
       upload_release:
         description: 'Upload as GitHub Release'
         required: false
@@ -22,6 +30,8 @@ jobs:
 
       - name: Build kernel
         run: bash build-kernel.sh
+        env:
+          KERNEL_BRANCH: ${{ inputs.kernel_branch }}
 
       - name: Build boot image
         run: bash build-bootimg.sh
