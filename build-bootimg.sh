@@ -169,6 +169,12 @@ with open(path, 'w') as f:
     f.write(content)
 PYEOF
 
+  # Ensure switch_root exists (busybox provides it, just needs a symlink)
+  if [ ! -e "$INITRAMFS_DIR/bin/switch_root" ] && [ -e "$INITRAMFS_DIR/bin/busybox" ]; then
+    ln -s busybox "$INITRAMFS_DIR/bin/switch_root"
+    echo "  - added switch_root -> busybox symlink"
+  fi
+
   echo "[OK] All patches applied."
 else
   echo "[OK] initramfs already patched."
