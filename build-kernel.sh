@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# build-kernel.sh — build Halium kernel for Kirin 710
-# Run on any ARM64 Ubuntu machine (Colima, GitHub Actions, bare metal):
+# build-kernel.sh — download pre-built kernel Image.gz from the kernel fork
+#
+# The kernel is built by CI in the fork repo and published as a GitHub Release.
+# This script downloads the latest Image.gz for the selected branch.
+#
+# Usage:
 #   bash build-kernel.sh
 #
 # Optional env vars:
-#   SKIP_DEPS=1        — skip apt dependency installation
-#   KERNEL_DIR=...     — use existing kernel source directory
 #   KERNEL_BRANCH=...  — kernel fork branch (default: headless-kirin710)
 #                        Available branches:
 #                          headless-kirin710  — minimal headless server config
@@ -13,53 +15,32 @@
 set -euo pipefail
 
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KERNEL_REPO="https://github.com/jglasovic/android_kernel_huawei_kirin710"
+KERNEL_REPO="jglasovic/android_kernel_huawei_kirin710"
 KERNEL_BRANCH="${KERNEL_BRANCH:-headless-kirin710}"
+RELEASE_TAG="${KERNEL_BRANCH}-latest"
+KERNEL_IMG="kernel/arch/arm64/boot/Image.gz"
 
 cd "$WORK_DIR"
 
-# Use sudo if not root
-SUDO=""
-[ "$(id -u)" -ne 0 ] && SUDO="sudo"
-
-if [ "${SKIP_DEPS:-}" != "1" ]; then
-  echo "[*] Installing dependencies..."
-  $SUDO apt-get update -qq
-  $SUDO apt-get install -y --no-install-recommends \
-    git bc bison flex libssl-dev make libc6-dev libncurses5-dev \
-    gcc binutils \
-    python3 ccache zip unzip curl wget lzop \
-    cpio 2>&1 | tail -5
+# Skip download if Image.gz already exists (local override / testing)
+if [ -f "$KERNEL_IMG" ]; then
+  echo "[OK] Kernel already present: $(du -sh "$KERNEL_IMG" | cut -f1) — skipping download."
+  echo "     Delete $KERNEL_IMG to force re-download."
+  exit 0
 fi
 
-# ── Clone kernel if not already present ──────────────────────────────────────
-if [ ! -d kernel/.git ]; then
-  echo "[*] Cloning kernel (this takes a few minutes)..."
-  git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel
+echo "[*] Downloading Image.gz from ${KERNEL_REPO} release '${RELEASE_TAG}'..."
+
+DOWNLOAD_URL="https://github.com/${KERNEL_REPO}/releases/download/${RELEASE_TAG}/Image.gz"
+
+mkdir -p "$(dirname "$KERNEL_IMG")"
+if command -v curl >/dev/null 2>&1; then
+  curl -fSL --retry 3 -o "$KERNEL_IMG" "$DOWNLOAD_URL"
+elif command -v wget >/dev/null 2>&1; then
+  wget -q --show-progress -O "$KERNEL_IMG" "$DOWNLOAD_URL"
 else
-  echo "[*] Kernel already cloned, skipping."
+  echo "[FAIL] Neither curl nor wget found. Install one and retry."
+  exit 1
 fi
 
-# ── Build kernel ──────────────────────────────────────────────────────────────
-echo "[*] Building kernel..."
-cd kernel
-KDIR=$(pwd)
-
-export ARCH=arm64
-
-make ARCH=arm64 kirin710_defconfig
-
-make ARCH=arm64 \
-  "BALONG_INC=-I${KDIR}/kernel" \
-  KCFLAGS="-Wno-error=maybe-uninitialized -Wno-error=address -Wno-error=sizeof-pointer-memaccess -Wno-error=misleading-indentation" \
-  -j$(nproc) Image.gz 2>&1 | tee "${WORK_DIR}/kernel_build.log"
-
-echo ""
-echo "[OK] Kernel built: $(du -sh arch/arm64/boot/Image.gz)"
-cd "$WORK_DIR"
-
-# ── Save timestamped copy ─────────────────────────────────────────────────
-BUILD_TAG="$(date +%Y%m%d-%H%M%S)"
-mkdir -p out
-cp kernel/arch/arm64/boot/Image.gz "out/Image-${BUILD_TAG}.gz"
-echo "[OK] Saved: out/Image-${BUILD_TAG}.gz"
+echo "[OK] Downloaded kernel: $(du -sh "$KERNEL_IMG" | cut -f1)"

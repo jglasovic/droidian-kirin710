@@ -20,7 +20,7 @@ on:
 jobs:
   build:
     name: Build halium-boot.img
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -28,7 +28,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Build kernel
+      - name: Download kernel
         run: bash build-kernel.sh
         env:
           KERNEL_BRANCH: ${{ inputs.kernel_branch }}
@@ -40,9 +40,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: halium-boot-${{ github.run_number }}
-          path: |
-            halium-boot.img
-            kernel_build.log
+          path: halium-boot.img
           retention-days: 60
 
       - name: Create GitHub Release
