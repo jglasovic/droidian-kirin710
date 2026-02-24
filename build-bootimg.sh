@@ -206,7 +206,7 @@ fi
 # ── Pack ramdisk ─────────────────────────────────────────────────────────────
 echo "[*] Packing ramdisk from ${INITRAMFS_DIR}/..."
 cd "$INITRAMFS_DIR"
-find . | cpio -o -H newc 2>/dev/null | gzip > "$WORK_DIR/ramdisk.img"
+find . | sort | cpio -o -H newc -R 0:0 2>/dev/null | gzip > "$WORK_DIR/ramdisk.img"
 cd "$WORK_DIR"
 echo "[OK] ramdisk.img: $(du -sh ramdisk.img | cut -f1)"
 
