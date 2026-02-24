@@ -115,7 +115,7 @@ with open(path, 'w') as f:
 print("  - init: replaced run-init with switch_root")
 PYEOF
 
-  # Patch 4: Non-ext4 userdata support in halium script
+  # Patch 4: Non-ext4 userdata support + additional fixes in halium script
   python3 - "$HALIUM" << 'PYEOF'
 import sys
 path = sys.argv[1]
@@ -158,7 +158,7 @@ new_block = '''\ttell_kmsg "checking filesystem type for userdata partition"
 \t\tOPTIONS="data=journal,"
 \t\tmount -o discard,$OPTIONS $path /tmpmnt
 \telse
-\t\ttell_kmsg "skipping e2fsck for non-ext4 ($_userdata_fs) userdata, mounting directly"
+\t\ttell_kmsg "skipping e2fsck for non-ext4 ($userdata_fs) userdata, mounting directly"
 \t\tmount -t $_userdata_fs $path /tmpmnt
 \tfi'''
 
@@ -167,6 +167,26 @@ if old_block in content:
     print("  - halium: added non-ext4 userdata support")
 else:
     print("  - halium: WARNING - mount block not found, skipping")
+
+# Patch 5: Add mountroot debug log after pre_mountroot
+content = content.replace(
+    '\tpre_mountroot\n\n\t[ "$quiet"',
+    '\tpre_mountroot\n\ttell_kmsg "[HALIUM] mountroot started"\n\n\t[ "$quiet"'
+)
+print("  - halium: added mountroot started log")
+
+# Patch 6: Remove stale comment before "Halium rootfs is" log
+content = content.replace(
+    '\t# If both $imagefile and $_syspart are set, something is wrong. The strange\n'
+    '\t# output from this could be a clue in that situation.\n'
+    '\ttell_kmsg "Halium rootfs is',
+    '\ttell_kmsg "Halium rootfs is'
+)
+print("  - halium: removed stale comment")
+
+# Patch 7: Fix trailing whitespace/blank lines
+content = content.replace('\t\n\t# Identify image mode', '\n\t# Identify image mode')
+content = content.replace('\t\tdone\n\n\telse', '\t\tdone\n\telse')
 
 with open(path, 'w') as f:
     f.write(content)
