@@ -1,0 +1,55 @@
+name: Update upstream images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    name: Mirror upstream system.img & rootfs.img
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download system.img from UBports CI
+        run: |
+          echo "[*] Downloading halium_halium_arm64.tar.xz from UBports CI..."
+          curl -fSL --retry 3 -o halium_arm64.tar.xz \
+            "https://ci.ubports.com/job/UBportsCommunityPortsJenkinsCI/job/ubports%252Fporting%252Fcommunity-ports%252Fjenkins-ci%252Fgeneric_arm64/job/halium-13.0/lastSuccessfulBuild/artifact/out/halium_halium_arm64.tar.xz"
+          echo "[*] Extracting system.img..."
+          tar xf halium_arm64.tar.xz system.img
+          rm halium_arm64.tar.xz
+          echo "[OK] system.img: $(du -sh system.img | cut -f1)"
+
+      - name: Download rootfs.img from Droidian releases
+        run: |
+          echo "[*] Finding latest Droidian rootfs release..."
+          ROOTFS_URL=$(curl -s https://api.github.com/repos/droidian-images/droidian/releases/latest \
+            | python3 -c "import sys,json; assets=json.load(sys.stdin)['assets']; print(next(a['browser_download_url'] for a in assets if 'rootfs-api33-arm64' in a['name'] and a['name'].endswith('.zip')))")
+          echo "[*] Downloading $ROOTFS_URL..."
+          curl -fSL --retry 3 -o rootfs.zip "$ROOTFS_URL"
+          echo "[*] Extracting rootfs.img..."
+          unzip -o rootfs.zip "data/rootfs.img" -d .
+          mv data/rootfs.img rootfs.img
+          rm -rf data rootfs.zip
+          echo "[OK] rootfs.img: $(du -sh rootfs.img | cut -f1)"
+
+      - name: Upload to upstream-images release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: upstream-images
+          name: "Upstream images (mirrored)"
+          body: |
+            Mirrored upstream images for the halium build.
+
+            - **system.img** — from [UBports CI](https://ci.ubports.com/job/UBportsCommunityPortsJenkinsCI/job/ubports%252Fporting%252Fcommunity-ports%252Fjenkins-ci%252Fgeneric_arm64/job/halium-13.0/)
+            - **rootfs.img** — from [Droidian releases](https://github.com/droidian-images/droidian/releases)
+
+            Last updated: ${{ github.event.repository.updated_at }}
+          files: |
+            system.img
+            rootfs.img
+          draft: false
+          prerelease: false
+          make_latest: false

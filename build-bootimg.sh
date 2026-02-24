@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# build-bootimg.sh — pack halium-boot.img from kernel + ramdisk
-# Requires: kernel already built (kernel/arch/arm64/boot/Image.gz)
-#
-# If halium-initramfs/ doesn't exist, it will be automatically downloaded
-# from the Halium initramfs-tools release and patched for Kirin 710.
+# build-bootimg.sh — download kernel + Halium initramfs, patch for Kirin 710, pack boot image
 #
 # Usage:
 #   bash build-bootimg.sh
+#
+# Optional env vars:
+#   KERNEL_BRANCH=...  — kernel fork branch (default: headless-kirin710)
+#                        Available: headless-kirin710, full-ui-kirin710
 set -euo pipefail
 
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$WORK_DIR"
+
+# Kernel fork
+KERNEL_REPO="jglasovic/android_kernel_huawei_kirin710"
+KERNEL_BRANCH="${KERNEL_BRANCH:-headless-kirin710}"
+KERNEL_IMG="kernel/arch/arm64/boot/Image.gz"
 
 # Pre-built Halium initramfs (from halium/initramfs-tools-halium)
 HALIUM_INITRD_URL="https://github.com/Halium/initramfs-tools-halium/releases/download/continuous/initrd.img-touch-arm64"
@@ -25,13 +30,19 @@ BOARD_SECOND_OFFSET="0x00e88000"
 BOARD_BOOTIMG_HEADER_VERSION="1"
 BOARD_KERNEL_CMDLINE="loglevel=4 initcall_debug=n page_tracker=on unmovable_isolate1=2:192M,3:224M,4:256M printktimer=0xfff0a000,0x534,0x538 androidboot.selinux=permissive buildvariant=user"
 
-KERNEL_IMG="kernel/arch/arm64/boot/Image.gz"
 INITRAMFS_DIR="halium-initramfs"
 
-# ── Check prerequisites ──────────────────────────────────────────────────────
-if [ ! -f "$KERNEL_IMG" ]; then
-  echo "[FAIL] Kernel not built. Run build-kernel.sh first."
-  exit 1
+# ── Download kernel if needed ────────────────────────────────────────────────
+if [ -f "$KERNEL_IMG" ]; then
+  echo "[OK] Kernel already present: $(du -sh "$KERNEL_IMG" | cut -f1) — skipping download."
+  echo "     Delete $KERNEL_IMG to force re-download."
+else
+  RELEASE_TAG="${KERNEL_BRANCH}-latest"
+  DOWNLOAD_URL="https://github.com/${KERNEL_REPO}/releases/download/${RELEASE_TAG}/Image.gz"
+  echo "[*] Downloading Image.gz from ${KERNEL_REPO} release '${RELEASE_TAG}'..."
+  mkdir -p "$(dirname "$KERNEL_IMG")"
+  curl -fSL --retry 3 -o "$KERNEL_IMG" "$DOWNLOAD_URL"
+  echo "[OK] Downloaded kernel: $(du -sh "$KERNEL_IMG" | cut -f1)"
 fi
 
 SUDO=""

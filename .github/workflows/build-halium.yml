@@ -28,19 +28,44 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Download kernel
-        run: bash build-kernel.sh
+      - name: Build boot image
+        run: bash build-bootimg.sh
         env:
           KERNEL_BRANCH: ${{ inputs.kernel_branch }}
 
-      - name: Build boot image
-        run: bash build-bootimg.sh
+      - name: Download system.img
+        run: |
+          echo "[*] Downloading system.img from own release..."
+          curl -fSL --retry 3 -o system.img \
+            "https://github.com/${{ github.repository }}/releases/download/upstream-images/system.img"
+          echo "[OK] system.img: $(du -sh system.img | cut -f1)"
 
-      - name: Upload artifacts
+      - name: Download rootfs.img
+        run: |
+          echo "[*] Downloading rootfs.img from own release..."
+          curl -fSL --retry 3 -o rootfs.img \
+            "https://github.com/${{ github.repository }}/releases/download/upstream-images/rootfs.img"
+          echo "[OK] rootfs.img: $(du -sh rootfs.img | cut -f1)"
+
+      - name: Upload halium-boot.img
         uses: actions/upload-artifact@v4
         with:
-          name: halium-boot-${{ github.run_number }}
+          name: halium-boot
           path: halium-boot.img
+          retention-days: 60
+
+      - name: Upload system.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: system
+          path: system.img
+          retention-days: 60
+
+      - name: Upload rootfs.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs
+          path: rootfs.img
           retention-days: 60
 
       - name: Create GitHub Release

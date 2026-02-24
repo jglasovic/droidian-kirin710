@@ -1,19 +1,15 @@
-# Kernel source (large, has its own repo)
+# Kernel (downloaded by build-kernel.sh)
 kernel/
 
-# Binary images (too large for git, not source)
-*.img
-*.bin
-*.zip
-*.cpio.gz
-
 # Build artifacts
-kernel_build.log
 out/
+*.img
+*.cpio.gz
+*.tar.xz
+*.zip
 
-# Ramdisk / initramfs (extracted and patched by build-bootimg.sh)
+# Initramfs (extracted and patched by build-bootimg.sh)
 halium-initramfs/
-halium_arm64.tar.xz
 
 # Claude Code
 .claude/
