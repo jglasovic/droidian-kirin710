@@ -33,7 +33,23 @@ jobs:
         env:
           KERNEL_BRANCH: ${{ inputs.kernel_branch }}
 
-      - name: Download rootfs.img
+      - name: Resolve upstream rootfs version
+        id: rootfs-version
+        run: |
+          ROOTFS_TAG=$(curl -s https://api.github.com/repos/droidian-images/droidian/releases/latest \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+          PATCH_HASH=$(sha256sum patch-rootfs.sh | cut -c1-12)
+          echo "cache-key=rootfs-patched-${ROOTFS_TAG}-${PATCH_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache patched rootfs.img
+        id: rootfs-cache
+        uses: actions/cache@v4
+        with:
+          path: rootfs.img
+          key: ${{ steps.rootfs-version.outputs.cache-key }}
+
+      - name: Download and patch rootfs.img
+        if: steps.rootfs-cache.outputs.cache-hit != 'true'
         run: |
           echo "[*] Finding latest Droidian rootfs release..."
           ROOTFS_URL=$(curl -s https://api.github.com/repos/droidian-images/droidian/releases/latest \
@@ -44,10 +60,9 @@ jobs:
           unzip -o rootfs.zip "data/rootfs.img" -d .
           mv data/rootfs.img rootfs.img
           rm -rf data rootfs.zip
-          echo "[OK] rootfs.img: $(du -sh rootfs.img | cut -f1)"
-
-      - name: Patch rootfs for Kirin 710
-        run: sudo bash patch-rootfs.sh
+          echo "[*] Patching rootfs for Kirin 710..."
+          sudo bash patch-rootfs.sh
+          echo "[OK] rootfs.img (patched): $(du -sh rootfs.img | cut -f1)"
 
       - name: Upload halium-boot.img
         uses: actions/upload-artifact@v4
