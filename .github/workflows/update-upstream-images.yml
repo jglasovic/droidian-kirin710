@@ -16,7 +16,7 @@ jobs:
         run: |
           echo "[*] Downloading halium_halium_arm64.tar.xz from UBports CI..."
           curl -fSL --retry 3 -o halium_arm64.tar.xz \
-            "https://ci.ubports.com/job/UBportsCommunityPortsJenkinsCI/job/ubports%252Fporting%252Fcommunity-ports%252Fjenkins-ci%252Fgeneric_arm64/job/halium-13.0/lastSuccessfulBuild/artifact/out/halium_halium_arm64.tar.xz"
+            "https://ci.ubports.com/job/UBportsCommunityPortsJenkinsCI/job/ubports%252Fporting%252Fcommunity-ports%252Fjenkins-ci%252Fgeneric_arm64/job/halium-13.0/lastSuccessfulBuild/artifact/halium_halium_arm64.tar.xz"
           echo "[*] Extracting system.img..."
           tar xf halium_arm64.tar.xz system.img
           rm halium_arm64.tar.xz
