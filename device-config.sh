@@ -4,17 +4,24 @@
 # Runs on device in recovery via ADB. Pure file writes — no chroot, no dpkg.
 # Accepts flags as $1 to control which steps run.
 #
-# Usage: sh device-config.sh "usb wifi"
+# Usage: sh device-config.sh "usb wifi headless"
 #
 # Flags:
-#   usb     — USB gadget trigger + NCM network service + setup script
-#   wifi    — Vendor mount + Hi1102 init + wpa_supplicant + DHCP + credentials
-#   vendor  — Vendor mount only (without WiFi)
+#   usb      — USB gadget trigger + NCM network + adbd TCP
+#   wifi     — Vendor mount + Hi1102 init + wpa_supplicant + DHCP + credentials
+#   vendor   — Vendor mount only (without WiFi)
+#   headless — Turn off display after boot
 #
 # Always runs: android-mount unmask
 set -eu
 
 FLAGS="${1:-}"
+
+# Debug log — readable via: adb shell cat /tmpmnt/device-config.log
+LOG="/tmpmnt/device-config.log"
+echo "=== device-config.sh ===" > "$LOG"
+echo "date: $(date 2>/dev/null || echo unknown)" >> "$LOG"
+echo "flags: '$FLAGS'" >> "$LOG"
 
 has_flag() {
     case " $FLAGS " in
@@ -23,16 +30,22 @@ has_flag() {
     esac
 }
 
+echo "has usb: $(has_flag usb && echo yes || echo no)" >> "$LOG"
+echo "has wifi: $(has_flag wifi && echo yes || echo no)" >> "$LOG"
+echo "has vendor: $(has_flag vendor && echo yes || echo no)" >> "$LOG"
+echo "has headless: $(has_flag headless && echo yes || echo no)" >> "$LOG"
+
 ROOTFS="/tmpmnt/rootfs.img"
 MNT="/mnt"
 
 if [ ! -f "$ROOTFS" ]; then
-    echo "[FAIL] $ROOTFS not found"
+    echo "[FAIL] $ROOTFS not found" | tee -a "$LOG"
     exit 1
 fi
 
 echo "[*] Mounting rootfs..."
 mount -o loop "$ROOTFS" "$MNT"
+echo "rootfs mounted at $MNT" >> "$LOG"
 
 cleanup() {
     umount "$MNT" 2>/dev/null || true
@@ -45,22 +58,42 @@ mkdir -p "$SYSTEMD/multi-user.target.wants"
 mkdir -p "$SYSTEMD/local-fs.target.wants"
 mkdir -p "$SYSTEMD/local-fs.target.requires"
 
+# Enable persistent journal logging
+mkdir -p "$MNT/var/log/journal"
+chmod 2755 "$MNT/var/log/journal"
+
 # ── Count steps ──────────────────────────────────────────────────────────────
-TOTAL=1  # android-mount is always step 1
-if has_flag usb; then TOTAL=$((TOTAL + 2)); fi       # gadget trigger + NCM
+TOTAL=3  # android-mount + devtools fixups + boot-debug always
+if has_flag usb; then TOTAL=$((TOTAL + 3)); fi        # gadget trigger + NCM + adbd
 if has_flag wifi || has_flag vendor; then TOTAL=$((TOTAL + 1)); fi  # vendor mount
-if has_flag wifi; then TOTAL=$((TOTAL + 4)); fi       # hi1102 + wpa + dhcp + creds
+if has_flag wifi; then TOTAL=$((TOTAL + 4)); fi        # hi1102 + wpa + dhcp + creds
+if has_flag headless; then TOTAL=$((TOTAL + 1)); fi    # display-off
 STEP=0
 
 next_step() {
     STEP=$((STEP + 1))
     echo "[$STEP/$TOTAL] $1"
+    echo "[$STEP/$TOTAL] $1" >> "$LOG"
 }
 
 # ── Always: Unmask android-mount service ─────────────────────────────────────
 next_step "Unmasking android-mount..."
 rm -f "$SYSTEMD/android-mount.service"
 ln -sf /lib/systemd/system/android-mount.service "$SYSTEMD/local-fs.target.requires/android-mount.service"
+
+# ── Always: Fix devtools side-effects ──────────────────────────────────────
+next_step "Fixing devtools side-effects..."
+# hybris-usb installs usb-tethering.service which conflicts with our NCM gadget
+ln -sf /dev/null "$SYSTEMD/usb-tethering.service"
+# isc-dhcp-server is a DHCP *server* (not client) — crashes on boot with no config
+ln -sf /dev/null "$SYSTEMD/isc-dhcp-server.service"
+ln -sf /dev/null "$SYSTEMD/isc-dhcp-server6.service"
+# Disable coredump storage — Android processes dump cores that fill disk
+mkdir -p "$MNT/etc/systemd/coredump.conf.d"
+cat > "$MNT/etc/systemd/coredump.conf.d/limit.conf" << 'EOF'
+[Coredump]
+Storage=none
+EOF
 
 # ── USB: gadget trigger ──────────────────────────────────────────────────────
 if has_flag usb; then
@@ -70,12 +103,12 @@ cat > "$SYSTEMD/usb-gadget-trigger.service" << 'UNIT'
 Description=Trigger USB gadget mode via HiSilicon DWC3
 DefaultDependencies=no
 After=sys-kernel-config.mount
-Before=usb-rndis.service
+Before=usb-rndis.service adbd.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'echo device > /sys/class/dual_role_usb/otg_default/mode 2>/dev/null || true; for i in 1 2 3 4 5; do [ -d /sys/class/udc/ff100000.dwc3 ] && exit 0; sleep 1; done'
+ExecStart=/bin/sh -c 'echo device > /sys/class/dual_role_usb/otg_default/mode 2>/dev/null || true; for i in $(seq 1 30); do [ -d /sys/class/udc/ff100000.dwc3 ] && exit 0; sleep 2; done; echo "UDC not ready after 60s" > /dev/kmsg 2>/dev/null; exit 1'
 
 [Install]
 WantedBy=multi-user.target
@@ -92,7 +125,7 @@ Description=USB NCM Gadget (SSH over USB)
 DefaultDependencies=no
 After=sys-kernel-config.mount usb-gadget-trigger.service
 Wants=usb-gadget-trigger.service
-Before=network.target
+Before=network.target NetworkManager.service
 
 [Service]
 Type=oneshot
@@ -108,7 +141,7 @@ mkdir -p "$MNT/usr/local/sbin"
 cat > "$MNT/usr/local/sbin/usb-rndis-setup.sh" << 'SCRIPT'
 #!/bin/sh
 set -e
-exec > /tmp/usb-rndis.log 2>&1
+exec > /var/log/usb-rndis.log 2>&1
 set -x
 
 GADGET=/sys/kernel/config/usb_gadget/g1
@@ -118,13 +151,13 @@ if ! mount | grep -q "type configfs"; then
 fi
 
 UDC=""
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+for i in $(seq 1 60); do
     UDC=$(ls /sys/class/udc/ 2>/dev/null | head -1)
     [ -n "$UDC" ] && break
-    sleep 1
+    sleep 2
 done
 if [ -z "$UDC" ]; then
-    echo "ERROR: No UDC after 15s" > /dev/kmsg 2>/dev/null || true
+    echo "ERROR: No UDC after 120s" > /dev/kmsg 2>/dev/null || true
     exit 1
 fi
 echo "UDC found: $UDC"
@@ -182,6 +215,17 @@ SCRIPT
 chmod +x "$MNT/usr/local/sbin/usb-rndis-setup.sh"
 fi
 
+# ── USB: adbd TCP ────────────────────────────────────────────────────────────
+if has_flag usb; then
+next_step "adbd over TCP:5555..."
+mkdir -p "$SYSTEMD/adbd.service.d"
+cat > "$SYSTEMD/adbd.service.d/tcp.conf" << 'UNIT'
+[Service]
+Environment=ADBD_SOCKET=tcp:5555
+UNIT
+ln -sf /usr/lib/systemd/system/adbd.service "$SYSTEMD/multi-user.target.wants/adbd.service" 2>/dev/null || true
+fi
+
 # ── Vendor mount (needed by WiFi, or standalone) ────────────────────────────
 if has_flag wifi || has_flag vendor; then
 next_step "Vendor partition mount..."
@@ -212,7 +256,7 @@ cat > "$SYSTEMD/hisi-wifi-init.service" << 'UNIT'
 [Unit]
 Description=Initialize Hi1102 WiFi
 After=android-system-vendor.mount
-Before=wpa_supplicant-wlan0.service
+Before=wpa_supplicant-wlan0.service NetworkManager.service
 Requires=android-system-vendor.mount
 
 [Service]
@@ -238,12 +282,15 @@ Description=WPA supplicant for wlan0
 After=hisi-wifi-init.service
 Requires=hisi-wifi-init.service
 Before=wifi-dhcp.service
+ConditionPathExists=/etc/wpa_supplicant/wpa_supplicant.conf
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/sbin/wpa_supplicant -D nl80211 -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf
 Restart=on-failure
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -287,11 +334,122 @@ else
 fi
 fi
 
+# ── Always: boot-debug service ─────────────────────────────────────────────
+next_step "Boot debug logger..."
+cat > "$SYSTEMD/boot-debug.service" << 'UNIT'
+[Unit]
+Description=Boot debug — capture system state after boot
+After=multi-user.target usb-rndis.service hisi-wifi-init.service wpa_supplicant-wlan0.service wifi-dhcp.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 60
+ExecStart=/usr/local/sbin/boot-debug.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+ln -sf /etc/systemd/system/boot-debug.service "$SYSTEMD/multi-user.target.wants/boot-debug.service"
+
+mkdir -p "$MNT/usr/local/sbin"
+cat > "$MNT/usr/local/sbin/boot-debug.sh" << 'SCRIPT'
+#!/bin/sh
+LOG="/var/log/boot-debug.log"
+exec > "$LOG" 2>&1
+echo "=== boot-debug $(date) ==="
+
+echo ""; echo "--- systemctl failed units ---"
+systemctl --no-pager list-units --state=failed 2>/dev/null || true
+
+echo ""; echo "--- systemctl all custom units ---"
+for svc in usb-gadget-trigger usb-rndis adbd android-mount android-system-vendor.mount \
+           hisi-wifi-init wpa_supplicant-wlan0 wifi-dhcp display-off package-sideload; do
+    echo ""
+    echo ">> $svc:"
+    systemctl status "$svc" --no-pager -l 2>/dev/null || echo "  (not found)"
+done
+
+echo ""; echo "--- journalctl for USB ---"
+journalctl -u usb-gadget-trigger -u usb-rndis --no-pager -n 50 2>/dev/null || true
+
+echo ""; echo "--- journalctl for WiFi ---"
+journalctl -u hisi-wifi-init -u wpa_supplicant-wlan0 -u wifi-dhcp --no-pager -n 50 2>/dev/null || true
+
+echo ""; echo "--- journalctl for sshd ---"
+journalctl -u ssh -u sshd --no-pager -n 30 2>/dev/null || true
+
+echo ""; echo "--- journalctl for adbd ---"
+journalctl -u adbd --no-pager -n 30 2>/dev/null || true
+
+echo ""; echo "--- journalctl for package-sideload ---"
+journalctl -u package-sideload --no-pager -n 30 2>/dev/null || true
+
+echo ""; echo "--- network interfaces ---"
+ip addr 2>/dev/null || ifconfig 2>/dev/null || true
+
+echo ""; echo "--- USB gadget state ---"
+ls -la /sys/class/udc/ 2>/dev/null || echo "no UDC"
+cat /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null || echo "no gadget UDC"
+ls -la /sys/kernel/config/usb_gadget/g1/configs/c.1/ 2>/dev/null || true
+
+echo ""; echo "--- wlan state ---"
+ip link show wlan0 2>/dev/null || echo "no wlan0"
+wpa_cli -i wlan0 status 2>/dev/null || true
+wpa_cli -i wlan0 scan_results 2>/dev/null || true
+
+echo ""; echo "--- listening ports ---"
+ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null || true
+
+echo ""; echo "--- usb-rndis log ---"
+cat /var/log/usb-rndis.log 2>/dev/null || echo "(no usb-rndis log)"
+
+echo ""; echo "--- dmesg USB/NCM/gadget ---"
+dmesg 2>/dev/null | grep -iE 'usb|ncm|gadget|dwc3|udc' | tail -30 || true
+
+echo ""; echo "--- dmesg wifi/wlan ---"
+dmesg 2>/dev/null | grep -iE 'wifi|wlan|hi110|hisi' | tail -30 || true
+
+echo ""; echo "--- journal errors ---"
+journalctl -p err --no-pager -n 30 2>/dev/null || true
+
+echo ""; echo "=== boot-debug done ==="
+SCRIPT
+chmod +x "$MNT/usr/local/sbin/boot-debug.sh"
+
+# ── Headless: display off ───────────────────────────────────────────────────
+if has_flag headless; then
+next_step "Display off (headless mode)..."
+cat > "$SYSTEMD/display-off.service" << 'UNIT'
+[Unit]
+Description=Turn off display (headless mode)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "dd if=/dev/zero of=/dev/fb0 bs=4096 count=1024 2>/dev/null; echo 4 > /sys/class/graphics/fb0/blank; echo 0 > /sys/class/leds/lcd_backlight0/brightness"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+ln -sf /etc/systemd/system/display-off.service "$SYSTEMD/multi-user.target.wants/display-off.service"
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
+echo "" >> "$LOG"
+echo "files written:" >> "$LOG"
+ls -la "$SYSTEMD/"*.service "$SYSTEMD/"*.mount 2>/dev/null >> "$LOG" || true
+echo "symlinks in multi-user.target.wants:" >> "$LOG"
+ls -la "$SYSTEMD/multi-user.target.wants/" >> "$LOG" 2>/dev/null || true
+echo "=== done ===" >> "$LOG"
+
 echo ""
 echo "[OK] Device configured. Services enabled:"
 if has_flag usb; then
     echo "     - USB NCM network (10.15.19.82/24)"
+    echo "     - adbd TCP:5555"
 fi
 echo "     - Android system mount"
 if has_flag wifi || has_flag vendor; then
@@ -301,4 +459,7 @@ if has_flag wifi; then
     echo "     - Hi1102 WiFi init"
     echo "     - wpa_supplicant (interface mode)"
     echo "     - WiFi DHCP"
+fi
+if has_flag headless; then
+    echo "     - Display off"
 fi

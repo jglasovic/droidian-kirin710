@@ -11,7 +11,11 @@ set -euo pipefail
 
 REPO="jglasovic/droidian-kirin710"
 ROOTFS_REPO="droidian-images/droidian"
+DEVTOOLS_REPO="droidian-images/droidian"
+DROIDIAN_PKG_BASE="http://releases.droidian.org/snapshots/current"
 ROOTFS_IMG="rootfs.img"
+DEVTOOLS_PAYLOAD="devtools-payload.tar"
+EXTRAS_PAYLOAD="extras-payload.tar"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
 
 # ── Working directory ────────────────────────────────────────────────────────
@@ -172,6 +176,58 @@ if [ "$DO_ROOTFS" = "yes" ]; then
     fi
 fi
 
+# ── Download devtools bundle ──────────────────────────────────────────────────
+# Droidian snapshot images need the devtools bundle for SSH, adbd, etc.
+if [ "$DO_ROOTFS" = "yes" ]; then
+    if [ -f "$DEVTOOLS_PAYLOAD" ]; then
+        echo "[OK] $DEVTOOLS_PAYLOAD already present — skipping download."
+    else
+        echo "[*] Finding latest Droidian devtools bundle..."
+        DEVTOOLS_URL=$(curl -sf "https://api.github.com/repos/${DEVTOOLS_REPO}/releases/latest" \
+            | python3 -c "import sys,json; assets=json.load(sys.stdin)['assets']; print(next(a['browser_download_url'] for a in assets if 'devtools-api33-arm64' in a['name'] and a['name'].endswith('.zip')))")
+        echo "[*] Downloading devtools bundle..."
+        echo "    $DEVTOOLS_URL"
+        curl -fSL --retry 3 -o devtools.zip "$DEVTOOLS_URL"
+        echo "[*] Extracting payload.tar..."
+        unzip -o devtools.zip "data/payload.tar" -d .
+        mv data/payload.tar "$DEVTOOLS_PAYLOAD"
+        rm -rf data devtools.zip
+        echo "[OK] $DEVTOOLS_PAYLOAD ($(du -sh "$DEVTOOLS_PAYLOAD" | cut -f1))"
+    fi
+
+    # Download extra packages (adbd, dhcpcd) and create sideload bundle
+    if [ -f "$EXTRAS_PAYLOAD" ]; then
+        echo "[OK] $EXTRAS_PAYLOAD already present — skipping download."
+    else
+        echo "[*] Downloading extra packages (adbd, dhcpcd)..."
+        EXTRAS_DIR=$(mktemp -d)
+        EXTRAS_PKGS="$EXTRAS_DIR/var/cache/package-sideload/bundles/kirin710-extras/archives"
+        mkdir -p "$EXTRAS_PKGS"
+
+        # Resolve package filenames from Droidian repo index
+        echo "[*] Fetching package index..."
+        PKGINDEX=$(mktemp)
+        curl -sfL "${DROIDIAN_PKG_BASE}/dists/rolling/main/binary-arm64/Packages.gz" | gunzip > "$PKGINDEX"
+
+        for pkg in adbd android-liblog android-libbase android-libboringssl android-libcutils dhcpcd-base; do
+            FILE=$(awk "/^Package: ${pkg}\$/,/^\$/" "$PKGINDEX" | grep '^Filename:' | head -1 | awk '{print $2}')
+            if [ -n "$FILE" ]; then
+                echo "    $pkg"
+                curl -fSL --retry 3 -o "$EXTRAS_PKGS/$(basename "$FILE")" "${DROIDIAN_PKG_BASE}/${FILE}"
+            else
+                echo "    WARNING: $pkg not found in repo"
+            fi
+        done
+        rm -f "$PKGINDEX"
+
+        printf 'adbd\ndhcpcd-base\n' > "$EXTRAS_DIR/var/cache/package-sideload/bundles/kirin710-extras/packages"
+        ln -sf /var/cache/package-sideload "$EXTRAS_DIR/system-update"
+        tar -C "$EXTRAS_DIR" -cf "$EXTRAS_PAYLOAD" ./
+        rm -rf "$EXTRAS_DIR"
+        echo "[OK] $EXTRAS_PAYLOAD ($(du -sh "$EXTRAS_PAYLOAD" | cut -f1))"
+    fi
+fi
+
 # ── Download boot image (multi-tier) ────────────────────────────────────────
 if [ "$DO_KERNEL" = "yes" ]; then
     if [ -f "$BOOT_IMG" ]; then
@@ -255,23 +311,71 @@ sys.exit(1)
 fi
 
 # ── Mount userdata on device ──────────────────────────────────────────────────
-if [ "$DO_ROOTFS" = "yes" ]; then
-    echo "[*] Mounting userdata partition on device..."
-    adb shell "mkdir -p /tmpmnt && mount /dev/block/by-name/userdata /tmpmnt 2>/dev/null || true"
+echo "[*] Mounting userdata partition on device..."
+adb shell "mkdir -p /tmpmnt && mount /dev/block/by-name/userdata /tmpmnt 2>/dev/null || true"
 
+if [ "$DO_ROOTFS" = "yes" ]; then
     PUSH=true
     if adb shell "[ -f /tmpmnt/rootfs.img ]" 2>/dev/null; then
         echo "    rootfs.img already on device."
         ask "    Overwrite?" "N" OVERWRITE
-        [ "$OVERWRITE" != "yes" ] && PUSH=false && echo "    Skipping rootfs push."
+        if [ "$OVERWRITE" = "yes" ]; then
+            echo "[*] Wiping userdata partition..."
+            adb shell "rm -rf /tmpmnt/*"
+            echo "[OK] Userdata wiped."
+        else
+            PUSH=false
+            echo "    Skipping rootfs push."
+        fi
     fi
 
     if [ "$PUSH" = true ]; then
-        adb shell "rm -f /tmpmnt/rootfs.img" 2>/dev/null || true
         echo "[*] Pushing rootfs.img to device (this takes a few minutes)..."
         adb push "$ROOTFS_IMG" /tmpmnt/rootfs.img
         echo "[OK] rootfs.img pushed."
     fi
+
+    # Expand rootfs on device to use most of userdata (~56GB)
+    # Stock rootfs.img is ~3.9GB and nearly full. The img is a fixed-size ext4
+    # filesystem — usable space inside Droidian is limited to the image size.
+    # Recovery has mkfs.ext4 but no resize2fs, so we create a new larger image
+    # and copy the contents over.
+    echo "[*] Expanding rootfs to 56GB on device (this takes a minute)..."
+    adb shell "
+        CURRENT=\$(stat -c%s /tmpmnt/rootfs.img 2>/dev/null || echo 0)
+        TARGET=60129542144  # 56GB
+        if [ \"\$CURRENT\" -lt \"\$TARGET\" ]; then
+            truncate -s 56G /tmpmnt/rootfs-new.img
+            mkfs.ext4 -q /tmpmnt/rootfs-new.img
+            mkdir -p /mnt-old /mnt-new
+            mount -o loop /tmpmnt/rootfs.img /mnt-old
+            mount -o loop /tmpmnt/rootfs-new.img /mnt-new
+            cp -a /mnt-old/. /mnt-new/
+            umount /mnt-old
+            umount /mnt-new
+            mv /tmpmnt/rootfs-new.img /tmpmnt/rootfs.img
+            rmdir /mnt-old /mnt-new 2>/dev/null || true
+            sync
+            echo 'expanded to 56GB'
+        else
+            echo 'already 56GB+'
+        fi
+    "
+
+    # Push sideload payloads into rootfs (installed on first boot)
+    adb shell "mount -o loop /tmpmnt/rootfs.img /mnt"
+    if [ -f "$DEVTOOLS_PAYLOAD" ]; then
+        echo "[*] Installing devtools bundle (SSH, git, strace, etc.)..."
+        adb push "$DEVTOOLS_PAYLOAD" /tmp/devtools-payload.tar
+        adb shell "cd /mnt && tar xf /tmp/devtools-payload.tar"
+    fi
+    if [ -f "$EXTRAS_PAYLOAD" ]; then
+        echo "[*] Installing extras bundle (adbd, dhcpcd)..."
+        adb push "$EXTRAS_PAYLOAD" /tmp/extras-payload.tar
+        adb shell "cd /mnt && tar xf /tmp/extras-payload.tar"
+    fi
+    adb shell "umount /mnt && sync"
+    echo "[OK] Sideload bundles staged for first-boot install."
 fi
 
 # ── Build flags for device-config.sh ─────────────────────────────────────────
@@ -279,6 +383,7 @@ FLAGS=""
 [ "$DO_USB" = "yes" ] && FLAGS="$FLAGS usb"
 [ "$DO_WIFI" = "yes" ] && FLAGS="$FLAGS wifi"
 [ "$DO_VENDOR" = "yes" ] && [ "$DO_WIFI" != "yes" ] && FLAGS="$FLAGS vendor"
+[ "$KERNEL_VARIANT" = "headless-kirin710" ] && FLAGS="$FLAGS headless"
 FLAGS="${FLAGS# }"  # trim leading space
 
 # ── Push WiFi credentials if needed ─────────────────────────────────────────
@@ -311,7 +416,7 @@ if [ -n "$FLAGS" ]; then
     fi
 
     adb push "$WORK_DIR/device-config.sh" /tmp/device-config.sh
-    adb shell sh /tmp/device-config.sh "$FLAGS"
+    adb shell "sh /tmp/device-config.sh '$FLAGS'"
 else
     echo "[*] No device configuration selected — skipping."
 fi
