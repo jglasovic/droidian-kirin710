@@ -2,7 +2,7 @@
 # patch-rootfs.sh — apply Kirin 710 device config to rootfs.img
 #
 # Bakes in static device configuration so that on first boot:
-#   - ADB over USB works (connect via: adb shell)
+#   - USB NCM network (10.15.19.82/24) + ADB over TCP:5555
 #   - android-rootfs.img is loop-mounted at /android/system
 #   - vendor partition is mounted (WiFi firmware)
 #   - Hi1102 WiFi chip is initialized
@@ -59,16 +59,125 @@ chroot "$MNT" apt-get update -qq
 chroot "$MNT" apt-get install -y --no-install-recommends adbd
 chroot "$MNT" apt-get clean
 umount "$MNT/dev" "$MNT/sys" "$MNT/proc"
-# Mask usb-rndis (NCM gadget) — it takes over the USB gadget config and blocks ADB
-ln -sf /dev/null "$MNT/etc/systemd/system/usb-rndis.service"
-# Add TCP alongside USB
+# USB gadget trigger — switches HiSilicon DWC3 into device mode
+cat > "$MNT/etc/systemd/system/usb-gadget-trigger.service" << 'UNIT'
+[Unit]
+Description=Trigger USB gadget mode via HiSilicon DWC3
+DefaultDependencies=no
+After=sys-kernel-config.mount
+Before=usb-rndis.service adbd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo device > /sys/class/dual_role_usb/otg_default/mode 2>/dev/null || true; for i in 1 2 3 4 5; do [ -d /sys/class/udc/ff100000.dwc3 ] && exit 0; sleep 1; done'
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+mkdir -p "$MNT/etc/systemd/system/multi-user.target.wants"
+ln -sf /etc/systemd/system/usb-gadget-trigger.service "$MNT/etc/systemd/system/multi-user.target.wants/usb-gadget-trigger.service"
+# USB NCM gadget — provides USB network interface (10.15.19.82/24)
+cat > "$MNT/etc/systemd/system/usb-rndis.service" << 'UNIT'
+[Unit]
+Description=USB NCM Gadget (SSH over USB)
+DefaultDependencies=no
+After=sys-kernel-config.mount usb-gadget-trigger.service
+Wants=usb-gadget-trigger.service
+Before=network.target NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/usb-rndis-setup.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+ln -sf /etc/systemd/system/usb-rndis.service "$MNT/etc/systemd/system/multi-user.target.wants/usb-rndis.service"
+mkdir -p "$MNT/usr/local/sbin"
+cat > "$MNT/usr/local/sbin/usb-rndis-setup.sh" << 'SCRIPT'
+#!/bin/sh
+set -e
+exec > /tmp/usb-rndis.log 2>&1
+set -x
+
+GADGET=/sys/kernel/config/usb_gadget/g1
+
+if ! mount | grep -q "type configfs"; then
+    mount -t configfs none /sys/kernel/config 2>/dev/null || true
+fi
+
+UDC=""
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    UDC=$(ls /sys/class/udc/ 2>/dev/null | head -1)
+    [ -n "$UDC" ] && break
+    sleep 1
+done
+if [ -z "$UDC" ]; then
+    echo "ERROR: No UDC after 15s" > /dev/kmsg 2>/dev/null || true
+    exit 1
+fi
+echo "UDC found: $UDC"
+
+for g in /sys/kernel/config/usb_gadget/g_debug /sys/kernel/config/usb_gadget/g1; do
+    if [ -d "$g" ]; then
+        echo "" > $g/UDC 2>/dev/null || true
+        rm -f $g/configs/c.1/ncm.usb0 2>/dev/null || true
+        rmdir $g/configs/c.1/strings/0x409 2>/dev/null || true
+        rmdir $g/configs/c.1 2>/dev/null || true
+        rmdir $g/functions/ncm.usb0 2>/dev/null || true
+        rmdir $g/strings/0x409 2>/dev/null || true
+        rmdir $g 2>/dev/null || true
+    fi
+done
+
+mkdir -p $GADGET
+echo 0x1d6b > $GADGET/idVendor
+echo 0x0104 > $GADGET/idProduct
+echo 0x0100 > $GADGET/bcdDevice
+echo 0x0200 > $GADGET/bcdUSB
+mkdir -p $GADGET/strings/0x409
+echo "droidian-sne"  > $GADGET/strings/0x409/serialnumber
+echo "Droidian"      > $GADGET/strings/0x409/manufacturer
+echo "USB Network"   > $GADGET/strings/0x409/product
+mkdir -p $GADGET/functions/ncm.usb0
+echo "DE:AD:BE:EF:00:01" > $GADGET/functions/ncm.usb0/host_addr
+echo "DE:AD:BE:EF:00:02" > $GADGET/functions/ncm.usb0/dev_addr
+mkdir -p $GADGET/configs/c.1/strings/0x409
+echo "CDC-NCM" > $GADGET/configs/c.1/strings/0x409/configuration
+echo 500       > $GADGET/configs/c.1/MaxPower
+ln -s $GADGET/functions/ncm.usb0 $GADGET/configs/c.1/
+
+echo "$UDC" > $GADGET/UDC
+echo "USB CDC-NCM gadget on $UDC" > /dev/kmsg 2>/dev/null || true
+
+sleep 2
+IFACE=""
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    IFACE=$(ip link show 2>/dev/null | grep -i "de:ad:be:ef:00:02" -B1 | head -1 | sed "s/^[0-9]*: \([^:@]*\).*/\1/")
+    [ -n "$IFACE" ] && break
+    sleep 1
+done
+
+if [ -n "$IFACE" ]; then
+    ip link set "$IFACE" up
+    ip addr flush dev "$IFACE" 2>/dev/null || true
+    ip addr add 10.15.19.82/24 dev "$IFACE"
+    echo "USB interface $IFACE up at 10.15.19.82/24" > /dev/kmsg 2>/dev/null || true
+else
+    echo "WARNING: NCM interface not found" > /dev/kmsg 2>/dev/null || true
+    exit 1
+fi
+SCRIPT
+chmod +x "$MNT/usr/local/sbin/usb-rndis-setup.sh"
+# adbd TCP — listens on port 5555 (reachable over NCM network)
 mkdir -p "$MNT/etc/systemd/system/adbd.service.d"
 cat > "$MNT/etc/systemd/system/adbd.service.d/tcp.conf" << 'UNIT'
 [Service]
 Environment=ADBD_SOCKET=tcp:5555
 UNIT
 # Enable adbd
-mkdir -p "$MNT/etc/systemd/system/multi-user.target.wants"
 ln -sf /usr/lib/systemd/system/adbd.service "$MNT/etc/systemd/system/multi-user.target.wants/adbd.service"
 echo "    adbd: OK"
 
@@ -149,6 +258,7 @@ echo "    wpa_supplicant: OK"
 
 echo ""
 echo "[OK] rootfs patched. On first boot:"
-echo "     - ADB over USB works (adb shell)"
+echo "     - USB NCM network at 10.15.19.82/24"
+echo "     - ADB over TCP: adb connect 10.15.19.82:5555"
 echo "     - WiFi init runs automatically"
 echo "     - User needs to add WiFi credentials and install dhcpcd"
