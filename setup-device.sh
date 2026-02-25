@@ -399,10 +399,10 @@ FLAGS="${FLAGS# }"  # trim leading space
 if [ "$DO_WIFI" = "yes" ]; then
     WIFI_COUNTRY="${WIFI_COUNTRY:-SI}"
     TMPCONF=$(mktemp)
-    # Generate hashed PSK using wpa_passphrase (no plaintext password on device)
-    HASHED_PSK=$(wpa_passphrase "$WIFI_SSID" "$WIFI_PASS" 2>/dev/null | grep -E '^\s+psk=' | grep -v '#' | head -1 | sed 's/.*psk=//')
-    if [ -z "$HASHED_PSK" ]; then
-        echo "    WARNING: wpa_passphrase not available, falling back to plaintext PSK"
+    # Generate hashed PSK (WPA2 PSK = PBKDF2-SHA1 with SSID as salt, 4096 iterations, 32 bytes)
+    HASHED_PSK=$(openssl kdf -keylen 32 -kdfopt digest:SHA1 -kdfopt pass:"$WIFI_PASS" -kdfopt salt:"$WIFI_SSID" -kdfopt iter:4096 PBKDF2 2>/dev/null | tr -d ':' | tr 'A-F' 'a-f' || true)
+    if [ -z "$HASHED_PSK" ] || [ ${#HASHED_PSK} -ne 64 ]; then
+        echo "    WARNING: PSK hashing failed, falling back to plaintext"
         PSK_LINE="    psk=\"${WIFI_PASS}\""
     else
         PSK_LINE="    psk=${HASHED_PSK}"
