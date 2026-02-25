@@ -24,11 +24,10 @@ This is the **first Droidian port for any Kirin device**.
 ```
 .
 ├── .github/workflows/
-│   ├── build-halium.yml              # CI — builds halium-boot.img (kernel + initramfs)
-│   └── build-rootfs.yml              # CI — downloads, patches and uploads rootfs.img
-├── build-bootimg.sh                  # Download kernel + Halium initramfs, patch for Kirin 710, pack boot image
-├── patch-rootfs.sh                   # Patch rootfs.img with Kirin 710 device config (ADB, vendor, WiFi init)
-└── setup-device.sh                   # Post-flash WiFi credentials setup over ADB
+│   └── build-halium.yml       # CI — builds halium-boot.img (kernel + initramfs)
+├── build-bootimg.sh            # Download kernel + Halium initramfs, patch for Kirin 710, pack boot image
+├── setup-device.sh             # All-in-one setup: download images, push rootfs, configure device, flash kernel
+└── device-config.sh            # On-device config script (pure file writes into mounted rootfs)
 ```
 
 ## Related Repositories
@@ -37,13 +36,58 @@ This is the **first Droidian port for any Kirin device**.
 |------------|-------------|
 | [android_kernel_huawei_kirin710](https://github.com/jglasovic/android_kernel_huawei_kirin710) | Kernel fork — patches, defconfigs, CI-built `Image.gz` |
 
-## Building
+## Prerequisites
+
+Install on your Mac/Linux host:
+
+- `adb` + `fastboot` — Android platform tools
+- `curl` — HTTP downloads
+- `gh` (optional) — [GitHub CLI](https://cli.github.com/) for downloading CI artifacts
+
+## Setup
+
+1. Boot device to **recovery** with ADB enabled
+2. Run the setup script:
+
+```bash
+bash setup-device.sh
+```
+
+The script will:
+- Download `halium-boot.img` from CI (or GitHub release)
+- Download `rootfs.img` from Droidian releases
+- Push `rootfs.img` to device via ADB
+- Ask for WiFi SSID + password
+- Configure all device services (USB network, WiFi, vendor mount)
+- Reboot to fastboot and flash the kernel
+
+3. After reboot:
+
+```bash
+# SSH over USB
+ssh droidian@10.15.19.82
+
+# Default password: 1234
+```
+
+### Re-running
+
+The script is re-runnable. If rootfs is already on the device, it will ask whether to overwrite or skip. Use this to:
+- Change WiFi credentials
+- Reflash the kernel
+- Reconfigure device services
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WIFI_COUNTRY` | `SI` | Country code for WiFi regulatory domain |
+
+## Building the Kernel
 
 ### GitHub Actions (recommended)
 
-1. Run **Build rootfs.img** — downloads and patches the Droidian rootfs (cached, only re-runs when upstream or patch changes).
-2. Run **Build halium-boot.img** — select a kernel branch and optionally publish a release.
-3. Download the artifacts: `halium-boot` and `rootfs`.
+Run **Build halium-boot.img** — select a kernel branch and optionally publish a release.
 
 ### Local Build
 
@@ -54,54 +98,6 @@ bash build-bootimg.sh
 ```
 
 Set `KERNEL_BRANCH` to choose a kernel config (`headless-kirin710` default, or `full-ui-kirin710`).
-
-Output: timestamped images in `out/` with a `halium-boot.img` symlink to the latest build.
-
-## Flashing
-
-Boot into fastboot: hold **Volume Down + Power** while connecting USB.
-
-```bash
-fastboot flash kernel halium-boot.img
-```
-
-On first boot the initramfs will start a telnet server over USB (no rootfs yet). Set up the USB network and push the rootfs:
-
-```bash
-# Set up USB network
-# macOS:
-sudo ifconfig en8 10.15.19.1 netmask 255.255.255.0 up
-# Linux:
-sudo ip addr add 10.15.19.1/24 dev usb0
-
-# Push rootfs
-scp rootfs.img root@10.15.19.82:/tmpmnt/
-
-# Reboot
-telnet 10.15.19.82
-# then: reboot
-```
-
-First boot takes 1-2 minutes (rootfs resize). After that, ADB works automatically:
-
-```bash
-# Over USB:
-adb shell
-
-# Over WiFi (after setup):
-adb connect <device-ip>:5555
-```
-
-## Post-Flash Setup
-
-The rootfs comes pre-configured with ADB, vendor mount, and WiFi init. Connect via USB and run the setup script to add WiFi credentials:
-
-```bash
-bash setup-device.sh "YOUR_WIFI_SSID" "YOUR_WIFI_PASSWORD"
-adb reboot
-```
-
-After reboot the device will auto-connect to WiFi.
 
 ## Links
 
