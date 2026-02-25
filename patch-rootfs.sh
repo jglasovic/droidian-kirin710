@@ -10,7 +10,6 @@
 #
 # After first boot the user still needs to:
 #   - Create /etc/wpa_supplicant/wpa_supplicant.conf with WiFi credentials
-#   - Install dhcpcd5 (apt install dhcpcd5)
 #
 # Usage:
 #   sudo bash patch-rootfs.sh [rootfs.img]
@@ -56,7 +55,7 @@ mount --bind /dev "$MNT/dev"
 rm -f "$MNT/etc/resolv.conf"
 cp /etc/resolv.conf "$MNT/etc/resolv.conf"
 chroot "$MNT" apt-get update -qq
-chroot "$MNT" apt-get install -y --no-install-recommends adbd
+chroot "$MNT" apt-get install -y --no-install-recommends adbd dhcpcd5
 chroot "$MNT" apt-get clean
 umount "$MNT/dev" "$MNT/sys" "$MNT/proc"
 # USB gadget trigger — switches HiSilicon DWC3 into device mode
@@ -261,4 +260,4 @@ echo "[OK] rootfs patched. On first boot:"
 echo "     - USB NCM network at 10.15.19.82/24"
 echo "     - ADB over TCP: adb connect 10.15.19.82:5555"
 echo "     - WiFi init runs automatically"
-echo "     - User needs to add WiFi credentials and install dhcpcd"
+echo "     - User needs to add WiFi credentials (bash setup-device.sh)"

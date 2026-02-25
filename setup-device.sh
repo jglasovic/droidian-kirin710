@@ -29,10 +29,10 @@ fi
 echo "[*] Connecting to device via ADB..."
 adb wait-for-device
 
-adb shell "echo droidian | sudo -S bash -s" << SETUP_EOF
+adb shell "bash -s" << SETUP_EOF
 set -euo pipefail
 
-echo "[1/3] Configuring WiFi credentials..."
+echo "[1/2] Configuring WiFi credentials..."
 mkdir -p /etc/wpa_supplicant
 cat > /etc/wpa_supplicant/wpa_supplicant.conf << WPACFG
 ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev
@@ -46,17 +46,12 @@ network={
 }
 WPACFG
 chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf
-echo "    wpa_supplicant.conf: OK"
-
-echo "[2/3] Installing dhcpcd..."
-apt-get update -qq
-apt-get install -y --no-install-recommends dhcpcd5 2>&1 | tail -3
 if ! grep -q "allowinterfaces wlan0" /etc/dhcpcd.conf 2>/dev/null; then
   echo "allowinterfaces wlan0" >> /etc/dhcpcd.conf
 fi
-echo "    dhcpcd: OK"
+echo "    wpa_supplicant.conf: OK"
 
-echo "[3/3] Locking WiFi MAC address (Hi1102 randomizes on each boot)..."
+echo "[2/2] Locking WiFi MAC address (Hi1102 randomizes on each boot)..."
 WLAN_MAC=\$(cat /sys/class/net/wlan0/address 2>/dev/null || echo "")
 if [ -z "\$WLAN_MAC" ] || [ "\$WLAN_MAC" = "00:00:00:00:00:00" ]; then
   echo "    WARNING: could not read wlan0 MAC, skipping"
