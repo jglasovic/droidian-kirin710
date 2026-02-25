@@ -496,7 +496,6 @@ for svc in \
     sensorfwd.service \
     iio-sensor-proxy.service \
     nfcd.service \
-    graphical.target \
     phosh.service \
     accounts-daemon.service \
     cups.service \
@@ -517,6 +516,8 @@ for svc in \
 ; do
     ln -sf /dev/null "$SYSTEMD/$svc"
 done
+# Switch default target from graphical to multi-user (don't mask graphical — it's the default)
+ln -sf /usr/lib/systemd/system/multi-user.target "$SYSTEMD/default.target"
 
 next_step "Performance tuning (headless server)..."
 cat > "$SYSTEMD/cpu-performance.service" << 'UNIT'
