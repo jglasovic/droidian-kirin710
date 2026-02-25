@@ -79,7 +79,7 @@ echo " ... OK"
 # ── Wait for device ─────────────────────────────────────────────────────────
 echo ""
 echo "Waiting for ADB device (boot to recovery with ADB enabled)..."
-adb wait-for-device
+while ! adb devices 2>/dev/null | grep -qE 'device|recovery'; do sleep 1; done
 echo "Device connected."
 echo ""
 
@@ -254,8 +254,11 @@ sys.exit(1)
     fi
 fi
 
-# ── Push rootfs ──────────────────────────────────────────────────────────────
+# ── Mount userdata on device ──────────────────────────────────────────────────
 if [ "$DO_ROOTFS" = "yes" ]; then
+    echo "[*] Mounting userdata partition on device..."
+    adb shell "mkdir -p /tmpmnt && mount /dev/block/by-name/userdata /tmpmnt 2>/dev/null || true"
+
     PUSH=true
     if adb shell "[ -f /tmpmnt/rootfs.img ]" 2>/dev/null; then
         echo "    rootfs.img already on device."
@@ -264,6 +267,7 @@ if [ "$DO_ROOTFS" = "yes" ]; then
     fi
 
     if [ "$PUSH" = true ]; then
+        adb shell "rm -f /tmpmnt/rootfs.img" 2>/dev/null || true
         echo "[*] Pushing rootfs.img to device (this takes a few minutes)..."
         adb push "$ROOTFS_IMG" /tmpmnt/rootfs.img
         echo "[OK] rootfs.img pushed."
@@ -322,6 +326,7 @@ if [ "$DO_KERNEL" = "yes" ]; then
 
     echo "[*] Flashing $BOOT_IMG..."
     fastboot flash kernel "$BOOT_IMG"
+    IN_FASTBOOT=true
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
@@ -337,6 +342,22 @@ if [ "$DO_KERNEL" = "yes" ]; then
     echo "  Kernel:        $KERNEL_VARIANT"
 fi
 echo "  Default password: 1234"
+
+# Reboot device if any changes were made
+DID_CHANGE=false
+[ "$DO_ROOTFS" = "yes" ] && DID_CHANGE=true
+[ -n "$FLAGS" ] && DID_CHANGE=true
+[ "$DO_KERNEL" = "yes" ] && DID_CHANGE=true
+
+if [ "$DID_CHANGE" = true ]; then
+    echo ""
+    echo "[*] Rebooting device..."
+    if [ "${IN_FASTBOOT:-false}" = true ]; then
+        fastboot reboot
+    else
+        adb reboot
+    fi
+fi
 
 # Clean up temp dir if running from curl
 if [ "$FROM_CURL" = true ]; then
