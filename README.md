@@ -212,7 +212,22 @@ In headless mode, the script masks ~30 services that are unnecessary for a headl
 | `droidian-wcnss-enable.service` | Qualcomm Prima WLAN chip |
 
 **Services kept for headless server use:**
-Core system (dbus, polkit, journald, logind, udevd, timesyncd, resolved), networking (NetworkManager, ssh, adbd), storage (udisks2), hardware monitoring (lm-sensors), and all our custom services (USB NCM, WiFi, display-off, boot-debug).
+Core system (dbus, polkit, journald, logind, udevd, timesyncd, resolved), networking (NetworkManager, ssh, adbd), storage (udisks2), hardware monitoring (lm-sensors), and all our custom services (USB NCM, WiFi, display-off, boot-debug, cpu-performance).
+
+### Performance Tuning
+
+In headless mode, a `cpu-performance.service` runs at boot to optimize for server workloads:
+
+| Setting | Default | Tuned | Effect |
+|---------|---------|-------|--------|
+| CPU governor | varies | `performance` | All 8 cores locked at max clock (LITTLE: 1709 MHz, big: 2189 MHz) |
+| CPU cores | may hotplug | all online | Forces all 8 cores to stay active |
+| I/O scheduler | `row` | `deadline` | Better throughput for storage (external HDD) |
+| `vm.swappiness` | 60 | 10 | Keep processes in RAM |
+| `vm.dirty_ratio` | 20 | 40 | Allow more write buffering before flush |
+| `vm.dirty_background_ratio` | 10 | 20 | Start background flush later |
+| `vm.vfs_cache_pressure` | 100 | 50 | Keep filesystem metadata cached longer |
+| TCP buffer sizes | ~128KB | 6MB | Better throughput for WireGuard/file serving |
 
 ## Building the Kernel
 
