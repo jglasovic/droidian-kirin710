@@ -53,6 +53,7 @@ fi
 mount --bind /proc "$MNT/proc"
 mount --bind /sys "$MNT/sys"
 mount --bind /dev "$MNT/dev"
+rm -f "$MNT/etc/resolv.conf"
 cp /etc/resolv.conf "$MNT/etc/resolv.conf"
 chroot "$MNT" apt-get update -qq
 chroot "$MNT" apt-get install -y --no-install-recommends adbd
