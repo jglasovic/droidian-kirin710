@@ -6,7 +6,11 @@ out/
 *.img
 *.cpio.gz
 *.tar.xz
+*.tar
 *.zip
+
+# Downloaded sideload packages
+sideload-extras/
 
 # Initramfs (extracted and patched by build-bootimg.sh)
 halium-initramfs/
