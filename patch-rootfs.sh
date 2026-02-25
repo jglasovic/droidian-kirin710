@@ -23,6 +23,12 @@ if [ ! -f "$ROOTFS" ]; then
   exit 1
 fi
 
+# Expand image by 500MB so apt has room to install packages
+echo "[*] Expanding $ROOTFS by 500MB..."
+dd if=/dev/zero bs=1M count=500 >> "$ROOTFS"
+e2fsck -f -y "$ROOTFS" || true
+resize2fs "$ROOTFS"
+
 MNT=$(mktemp -d)
 echo "[*] Mounting $ROOTFS at $MNT..."
 mount -o loop "$ROOTFS" "$MNT"
