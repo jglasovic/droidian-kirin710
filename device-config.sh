@@ -85,6 +85,8 @@ ln -sf /lib/systemd/system/android-mount.service "$SYSTEMD/local-fs.target.requi
 next_step "Fixing devtools side-effects..."
 # hybris-usb installs usb-tethering.service which conflicts with our NCM gadget
 ln -sf /dev/null "$SYSTEMD/usb-tethering.service"
+# mtp-configfs reconfigures USB gadget for MTP/RNDIS, wiping our NCM setup
+ln -sf /dev/null "$SYSTEMD/mtp-configfs@.service"
 # isc-dhcp-server is a DHCP *server* (not client) — crashes on boot with no config
 ln -sf /dev/null "$SYSTEMD/isc-dhcp-server.service"
 ln -sf /dev/null "$SYSTEMD/isc-dhcp-server6.service"
@@ -108,7 +110,7 @@ Before=usb-rndis.service adbd.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'echo device > /sys/class/dual_role_usb/otg_default/mode 2>/dev/null || true; for i in $(seq 1 30); do [ -d /sys/class/udc/ff100000.dwc3 ] && exit 0; sleep 2; done; echo "UDC not ready after 60s" > /dev/kmsg 2>/dev/null; exit 1'
+ExecStart=/bin/sh -c 'sh -c "echo device > /sys/class/dual_role_usb/otg_default/mode" 2>/dev/null || true; for i in $(seq 1 60); do [ -d /sys/class/udc/ff100000.dwc3 ] && exit 0; sleep 2; done; echo "UDC not ready after 120s" > /dev/kmsg 2>/dev/null; exit 1'
 
 [Install]
 WantedBy=multi-user.target
@@ -306,6 +308,8 @@ cat > "$SYSTEMD/wifi-dhcp.service" << 'UNIT'
 Description=DHCP client for wlan0
 After=wpa_supplicant-wlan0.service
 Requires=wpa_supplicant-wlan0.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple

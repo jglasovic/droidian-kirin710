@@ -15,7 +15,7 @@ DEVTOOLS_REPO="droidian-images/droidian"
 DROIDIAN_PKG_BASE="http://releases.droidian.org/snapshots/current"
 ROOTFS_IMG="rootfs.img"
 DEVTOOLS_PAYLOAD="devtools-payload.tar"
-EXTRAS_PAYLOAD="extras-payload.tar"
+EXTRAS_LOCAL="sideload-extras"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
 
 # ── Working directory ────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ echo " ... OK"
 # ── Wait for device ─────────────────────────────────────────────────────────
 echo ""
 echo "Waiting for ADB device (boot to recovery with ADB enabled)..."
-while ! adb devices 2>/dev/null | grep -qE 'device|recovery'; do sleep 1; done
+while ! adb devices 2>/dev/null | grep -qE '\t(device|recovery)$'; do sleep 1; done
 echo "Device connected."
 echo ""
 
@@ -189,42 +189,40 @@ if [ "$DO_ROOTFS" = "yes" ]; then
         echo "    $DEVTOOLS_URL"
         curl -fSL --retry 3 -o devtools.zip "$DEVTOOLS_URL"
         echo "[*] Extracting payload.tar..."
-        unzip -o devtools.zip "data/payload.tar" -d .
-        mv data/payload.tar "$DEVTOOLS_PAYLOAD"
-        rm -rf data devtools.zip
+        unzip -o devtools.zip "payload.tar" -d .
+        mv payload.tar "$DEVTOOLS_PAYLOAD"
+        rm -f devtools.zip
         echo "[OK] $DEVTOOLS_PAYLOAD ($(du -sh "$DEVTOOLS_PAYLOAD" | cut -f1))"
     fi
 
-    # Download extra packages (adbd, dhcpcd) and create sideload bundle
-    if [ -f "$EXTRAS_PAYLOAD" ]; then
-        echo "[OK] $EXTRAS_PAYLOAD already present — skipping download."
+    # Download extra packages (adbd, dhcpcd) — pushed to device later as raw debs
+    if [ -d "$EXTRAS_LOCAL" ] && [ "$(ls "$EXTRAS_LOCAL"/*.deb 2>/dev/null | wc -l)" -gt 0 ]; then
+        echo "[OK] $EXTRAS_LOCAL/ already has debs — skipping download."
     else
         echo "[*] Downloading extra packages (adbd, dhcpcd)..."
-        EXTRAS_DIR=$(mktemp -d)
-        EXTRAS_PKGS="$EXTRAS_DIR/var/cache/package-sideload/bundles/kirin710-extras/archives"
-        mkdir -p "$EXTRAS_PKGS"
+        mkdir -p "$EXTRAS_LOCAL"
 
-        # Resolve package filenames from Droidian repo index
         echo "[*] Fetching package index..."
         PKGINDEX=$(mktemp)
         curl -sfL "${DROIDIAN_PKG_BASE}/dists/rolling/main/binary-arm64/Packages.gz" | gunzip > "$PKGINDEX"
 
         for pkg in adbd android-liblog android-libbase android-libboringssl android-libcutils dhcpcd-base; do
-            FILE=$(awk "/^Package: ${pkg}\$/,/^\$/" "$PKGINDEX" | grep '^Filename:' | head -1 | awk '{print $2}')
+            STANZA=$(awk "/^Package: ${pkg}\$/,/^\$/" "$PKGINDEX")
+            FILE=$(echo "$STANZA" | grep '^Filename:' | head -1 | awk '{print $2}')
+            VERSION=$(echo "$STANZA" | grep '^Version:' | head -1 | awk '{print $2}')
+            ARCH=$(echo "$STANZA" | grep '^Architecture:' | head -1 | awk '{print $2}')
             if [ -n "$FILE" ]; then
-                echo "    $pkg"
-                curl -fSL --retry 3 -o "$EXTRAS_PKGS/$(basename "$FILE")" "${DROIDIAN_PKG_BASE}/${FILE}"
+                # apt cache expects epoch colon encoded as %3a in filenames
+                CACHE_VER=$(echo "$VERSION" | sed 's/:/%3a/g')
+                DEB_NAME="${pkg}_${CACHE_VER}_${ARCH:-arm64}.deb"
+                echo "    $pkg ($VERSION)"
+                curl -fSL --retry 3 -o "$EXTRAS_LOCAL/$DEB_NAME" "${DROIDIAN_PKG_BASE}/${FILE}"
             else
                 echo "    WARNING: $pkg not found in repo"
             fi
         done
         rm -f "$PKGINDEX"
-
-        printf 'adbd\ndhcpcd-base\n' > "$EXTRAS_DIR/var/cache/package-sideload/bundles/kirin710-extras/packages"
-        ln -sf /var/cache/package-sideload "$EXTRAS_DIR/system-update"
-        tar -C "$EXTRAS_DIR" -cf "$EXTRAS_PAYLOAD" ./
-        rm -rf "$EXTRAS_DIR"
-        echo "[OK] $EXTRAS_PAYLOAD ($(du -sh "$EXTRAS_PAYLOAD" | cut -f1))"
+        echo "[OK] Downloaded $(ls "$EXTRAS_LOCAL"/*.deb 2>/dev/null | wc -l | tr -d ' ') debs"
     fi
 fi
 
@@ -367,12 +365,19 @@ if [ "$DO_ROOTFS" = "yes" ]; then
     if [ -f "$DEVTOOLS_PAYLOAD" ]; then
         echo "[*] Installing devtools bundle (SSH, git, strace, etc.)..."
         adb push "$DEVTOOLS_PAYLOAD" /tmp/devtools-payload.tar
-        adb shell "cd /mnt && tar xf /tmp/devtools-payload.tar"
+        adb shell "cd /mnt && tar -oxf /tmp/devtools-payload.tar"
     fi
-    if [ -f "$EXTRAS_PAYLOAD" ]; then
-        echo "[*] Installing extras bundle (adbd, dhcpcd)..."
-        adb push "$EXTRAS_PAYLOAD" /tmp/extras-payload.tar
-        adb shell "cd /mnt && tar xf /tmp/extras-payload.tar"
+    if [ -d "$EXTRAS_LOCAL" ] && [ "$(ls "$EXTRAS_LOCAL"/*.deb 2>/dev/null | wc -l)" -gt 0 ]; then
+        echo "[*] Installing extras (adbd, dhcpcd)..."
+        adb shell "mkdir -p /tmp/extras"
+        adb push "$EXTRAS_LOCAL"/. /tmp/extras/
+        adb shell "
+            BUNDLE=/mnt/var/cache/package-sideload/bundles/kirin710-extras
+            mkdir -p \$BUNDLE/archives
+            mv /tmp/extras/*.deb \$BUNDLE/archives/
+            printf 'adbd\ndhcpcd-base\n' > \$BUNDLE/packages
+            rm -rf /tmp/extras
+        "
     fi
     adb shell "umount /mnt && sync"
     echo "[OK] Sideload bundles staged for first-boot install."
@@ -446,6 +451,7 @@ fi
 if [ "$DO_KERNEL" = "yes" ]; then
     echo "  Kernel:        $KERNEL_VARIANT"
 fi
+echo "  Default user:     droidian"
 echo "  Default password: 1234"
 
 # Reboot device if any changes were made
