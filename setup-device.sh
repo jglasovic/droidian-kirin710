@@ -91,6 +91,7 @@ echo ""
 DO_ROOTFS=""
 DO_USB=""
 DO_WIFI=""
+DO_WIFI_FIXMAC=""
 DO_VENDOR=""
 DO_KERNEL=""
 WIFI_SSID=""
@@ -107,6 +108,7 @@ if [ "$DO_WIFI" = "yes" ]; then
     if [ -z "$WIFI_SSID" ] || [ -z "$WIFI_PASS" ]; then
         die "WiFi SSID and password are required when WiFi is enabled."
     fi
+    ask "  Lock WiFi MAC address (use first-boot MAC permanently)?" "N" DO_WIFI_FIXMAC
     # WiFi auto-includes vendor mount
     DO_VENDOR="yes"
 else
@@ -139,6 +141,7 @@ else
 fi
 if [ "$DO_WIFI" = "yes" ]; then
     printf "  WiFi:           %s\n" "$WIFI_SSID"
+    printf "  Lock MAC:       %s\n" "$DO_WIFI_FIXMAC"
     printf "  Vendor mount:   yes (via WiFi)\n"
 else
     printf "  WiFi:           no\n"
@@ -387,6 +390,7 @@ fi
 FLAGS=""
 [ "$DO_USB" = "yes" ] && FLAGS="$FLAGS usb"
 [ "$DO_WIFI" = "yes" ] && FLAGS="$FLAGS wifi"
+[ "$DO_WIFI_FIXMAC" = "yes" ] && FLAGS="$FLAGS fixmac"
 [ "$DO_VENDOR" = "yes" ] && [ "$DO_WIFI" != "yes" ] && FLAGS="$FLAGS vendor"
 [ "$KERNEL_VARIANT" = "headless-kirin710" ] && FLAGS="$FLAGS headless"
 FLAGS="${FLAGS# }"  # trim leading space
@@ -395,6 +399,14 @@ FLAGS="${FLAGS# }"  # trim leading space
 if [ "$DO_WIFI" = "yes" ]; then
     WIFI_COUNTRY="${WIFI_COUNTRY:-SI}"
     TMPCONF=$(mktemp)
+    # Generate hashed PSK using wpa_passphrase (no plaintext password on device)
+    HASHED_PSK=$(wpa_passphrase "$WIFI_SSID" "$WIFI_PASS" 2>/dev/null | grep -E '^\s+psk=' | grep -v '#' | head -1 | sed 's/.*psk=//')
+    if [ -z "$HASHED_PSK" ]; then
+        echo "    WARNING: wpa_passphrase not available, falling back to plaintext PSK"
+        PSK_LINE="    psk=\"${WIFI_PASS}\""
+    else
+        PSK_LINE="    psk=${HASHED_PSK}"
+    fi
     cat > "$TMPCONF" << EOF
 ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev
 update_config=1
@@ -403,7 +415,7 @@ country=${WIFI_COUNTRY}
 
 network={
     ssid="${WIFI_SSID}"
-    psk="${WIFI_PASS}"
+${PSK_LINE}
 }
 EOF
     adb push "$TMPCONF" /tmp/wpa_supplicant.conf
@@ -429,7 +441,8 @@ fi
 # ── Flash kernel ─────────────────────────────────────────────────────────────
 if [ "$DO_KERNEL" = "yes" ]; then
     echo "[*] Rebooting to fastboot..."
-    adb reboot bootloader
+    sleep 10
+    adb reboot-bootloader
 
     echo "[*] Waiting for fastboot device..."
     fastboot wait-for-device 2>/dev/null || sleep 10
@@ -443,16 +456,27 @@ fi
 echo ""
 echo "=== Setup complete ==="
 if [ "$DO_USB" = "yes" ]; then
-    echo "  SSH over USB:  ssh droidian@10.15.19.82"
+    echo ""
+    echo "  USB SSH:  ssh droidian@10.15.19.82"
+    echo "  USB ADB:  adb connect 10.15.19.82:5555"
+    echo ""
+    echo "  NOTE: You must set the host IP on the USB NCM interface first:"
+    echo "    sudo ifconfig en11 10.15.19.1 netmask 255.255.255.0   (macOS)"
+    echo "    sudo ip addr add 10.15.19.1/24 dev usb0               (Linux)"
 fi
 if [ "$DO_WIFI" = "yes" ]; then
-    echo "  WiFi:          $WIFI_SSID"
+    echo ""
+    echo "  WiFi:     $WIFI_SSID (IP assigned via DHCP)"
 fi
 if [ "$DO_KERNEL" = "yes" ]; then
-    echo "  Kernel:        $KERNEL_VARIANT"
+    echo "  Kernel:   $KERNEL_VARIANT"
 fi
-echo "  Default user:     droidian"
-echo "  Default password: 1234"
+echo ""
+echo "  User:     droidian"
+echo "  Password: 1234"
+echo ""
+echo "  The device will reboot twice: first boot installs sideloaded"
+echo "  packages, second boot is ready to use."
 
 # Reboot device if any changes were made
 DID_CHANGE=false

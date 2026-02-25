@@ -10,6 +10,7 @@
 #   usb      — USB gadget trigger + NCM network + adbd TCP
 #   wifi     — Vendor mount + Hi1102 init + wpa_supplicant + DHCP + credentials
 #   vendor   — Vendor mount only (without WiFi)
+#   fixmac   — Lock WiFi MAC address (capture on first boot, reuse forever)
 #   headless — Turn off display after boot
 #
 # Always runs: android-mount unmask
@@ -33,6 +34,7 @@ has_flag() {
 echo "has usb: $(has_flag usb && echo yes || echo no)" >> "$LOG"
 echo "has wifi: $(has_flag wifi && echo yes || echo no)" >> "$LOG"
 echo "has vendor: $(has_flag vendor && echo yes || echo no)" >> "$LOG"
+echo "has fixmac: $(has_flag fixmac && echo yes || echo no)" >> "$LOG"
 echo "has headless: $(has_flag headless && echo yes || echo no)" >> "$LOG"
 
 ROOTFS="/tmpmnt/rootfs.img"
@@ -67,7 +69,8 @@ TOTAL=3  # android-mount + devtools fixups + boot-debug always
 if has_flag usb; then TOTAL=$((TOTAL + 3)); fi        # gadget trigger + NCM + adbd
 if has_flag wifi || has_flag vendor; then TOTAL=$((TOTAL + 1)); fi  # vendor mount
 if has_flag wifi; then TOTAL=$((TOTAL + 4)); fi        # hi1102 + wpa + dhcp + creds
-if has_flag headless; then TOTAL=$((TOTAL + 1)); fi    # display-off
+if has_flag fixmac; then TOTAL=$((TOTAL + 1)); fi      # lock WiFi MAC
+if has_flag headless; then TOTAL=$((TOTAL + 2)); fi    # mask Android services + display-off
 STEP=0
 
 next_step() {
@@ -221,9 +224,13 @@ fi
 if has_flag usb; then
 next_step "adbd over TCP:5555..."
 mkdir -p "$SYSTEMD/adbd.service.d"
-cat > "$SYSTEMD/adbd.service.d/tcp.conf" << 'UNIT'
+cat > "$SYSTEMD/adbd.service.d/override.conf" << 'UNIT'
 [Service]
 Environment=ADBD_SOCKET=tcp:5555
+# Clear gadget management — our usb-rndis-setup.sh handles NCM+ADB gadget
+ExecStartPre=
+ExecStartPost=
+ExecStopPost=
 UNIT
 ln -sf /usr/lib/systemd/system/adbd.service "$SYSTEMD/multi-user.target.wants/adbd.service" 2>/dev/null || true
 fi
@@ -314,7 +321,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 ExecStartPre=/bin/sh -c 'sleep 5'
-ExecStart=/bin/sh -c 'if command -v dhclient >/dev/null 2>&1; then exec dhclient -v -4 wlan0; elif command -v dhcpcd >/dev/null 2>&1; then exec dhcpcd -4 wlan0; elif command -v udhcpc >/dev/null 2>&1; then exec udhcpc -i wlan0; else echo "No DHCP client found" > /dev/kmsg; exit 1; fi'
+ExecStart=/bin/sh -c 'if command -v dhclient >/dev/null 2>&1; then exec dhclient -v -4 wlan0; elif command -v dhcpcd >/dev/null 2>&1; then exec dhcpcd -B -4 wlan0; elif command -v udhcpc >/dev/null 2>&1; then exec udhcpc -i wlan0; else echo "No DHCP client found" > /dev/kmsg; exit 1; fi'
 Restart=on-failure
 RestartSec=10
 
@@ -336,6 +343,54 @@ if [ -f /tmp/wpa_supplicant.conf ]; then
 else
     echo "    WARNING: /tmp/wpa_supplicant.conf not found, skipping WiFi credentials"
 fi
+fi
+
+# ── WiFi: lock MAC address ────────────────────────────────────────────────
+if has_flag fixmac; then
+next_step "WiFi MAC lock service..."
+cat > "$SYSTEMD/wifi-mac-lock.service" << 'UNIT'
+[Unit]
+Description=Lock WiFi MAC address
+After=hisi-wifi-init.service
+Before=wpa_supplicant-wlan0.service
+Requires=hisi-wifi-init.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/wifi-mac-lock.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+ln -sf /etc/systemd/system/wifi-mac-lock.service "$SYSTEMD/multi-user.target.wants/wifi-mac-lock.service"
+
+mkdir -p "$MNT/usr/local/sbin"
+cat > "$MNT/usr/local/sbin/wifi-mac-lock.sh" << 'SCRIPT'
+#!/bin/sh
+MAC_FILE="/etc/wlan0-mac"
+IFACE="wlan0"
+
+if [ -f "$MAC_FILE" ]; then
+    # Apply saved MAC
+    MAC=$(cat "$MAC_FILE")
+    ip link set "$IFACE" down
+    ip link set "$IFACE" address "$MAC"
+    ip link set "$IFACE" up
+    echo "wlan0 MAC locked to $MAC" > /dev/kmsg 2>/dev/null || true
+else
+    # First boot — capture current MAC and save it
+    MAC=$(ip link show "$IFACE" 2>/dev/null | grep -o 'link/ether [^ ]*' | awk '{print $2}')
+    if [ -n "$MAC" ] && [ "$MAC" != "00:00:00:00:00:00" ]; then
+        echo "$MAC" > "$MAC_FILE"
+        echo "wlan0 MAC saved: $MAC" > /dev/kmsg 2>/dev/null || true
+    else
+        echo "wlan0 MAC not available yet" > /dev/kmsg 2>/dev/null || true
+        exit 1
+    fi
+fi
+SCRIPT
+chmod +x "$MNT/usr/local/sbin/wifi-mac-lock.sh"
 fi
 
 # ── Always: boot-debug service ─────────────────────────────────────────────
@@ -422,8 +477,47 @@ echo ""; echo "=== boot-debug done ==="
 SCRIPT
 chmod +x "$MNT/usr/local/sbin/boot-debug.sh"
 
-# ── Headless: display off ───────────────────────────────────────────────────
+# ── Headless: mask Android/UI services ────────────────────────────────────────
 if has_flag headless; then
+next_step "Masking unnecessary services (headless server)..."
+# Keeping: ssh, adbd, NetworkManager, systemd-resolved, dbus, polkit, udevd,
+#          journald, logind, timesyncd, udisks2, lm-sensors, udev
+# Keeping: our services (usb-rndis, wifi, gadget-trigger, display-off, boot-debug)
+for svc in \
+    lxc@android.service \
+    lxc.service \
+    lxc-monitord.service \
+    lxc-net.service \
+    bluebinder.service \
+    bluetooth.service \
+    ModemManager.service \
+    ofono.service \
+    droidian-fpd.service \
+    sensorfwd.service \
+    iio-sensor-proxy.service \
+    nfcd.service \
+    graphical.target \
+    phosh.service \
+    accounts-daemon.service \
+    cups.service \
+    cups.path \
+    avahi-daemon.service \
+    strongswan-starter.service \
+    openvpn.service \
+    vnstat.service \
+    droidian-boot-wlan.service \
+    droidian-boot-wlan.path \
+    droidian-ipa-enable.service \
+    droidian-lmk-disable.service \
+    droidian-wcnss-enable.service \
+    droidian_boot_completed.service \
+    android_boot_completed.service \
+    android-cpuset.service \
+    android-service@hwcomposer.service \
+; do
+    ln -sf /dev/null "$SYSTEMD/$svc"
+done
+
 next_step "Display off (headless mode)..."
 cat > "$SYSTEMD/display-off.service" << 'UNIT'
 [Unit]
