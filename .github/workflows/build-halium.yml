@@ -36,7 +36,7 @@ jobs:
       - name: Upload halium-boot.img
         uses: actions/upload-artifact@v4
         with:
-          name: halium-boot
+          name: halium-boot-${{ inputs.kernel_branch }}
           path: halium-boot.img
           retention-days: 60
 
@@ -44,12 +44,13 @@ jobs:
         if: ${{ inputs.upload_release == true }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: halium-${{ github.run_number }}
-          name: "Halium sydney - Build ${{ github.run_number }}"
+          tag_name: halium-${{ inputs.kernel_branch }}-${{ github.run_number }}
+          name: "Halium ${{ inputs.kernel_branch }} - Build ${{ github.run_number }}"
           body: |
             ## Halium for Huawei Mate 20 Lite (SNE-LX1 / sydney)
 
             **Kernel:** 4.9.337 (android@13)
+            **Variant:** ${{ inputs.kernel_branch }}
 
             ### Flash
             ```

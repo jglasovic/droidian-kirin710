@@ -26,8 +26,8 @@ This is the **first Droidian port for any Kirin device**.
 ├── .github/workflows/
 │   └── build-halium.yml       # CI — builds halium-boot.img (kernel + initramfs)
 ├── build-bootimg.sh            # Download kernel + Halium initramfs, patch for Kirin 710, pack boot image
-├── setup-device.sh             # All-in-one setup: download images, push rootfs, configure device, flash kernel
-└── device-config.sh            # On-device config script (pure file writes into mounted rootfs)
+├── setup-device.sh             # Interactive setup: download images, push rootfs, configure device, flash kernel
+└── device-config.sh            # On-device config script (flag-based, pure file writes into mounted rootfs)
 ```
 
 ## Related Repositories
@@ -46,22 +46,56 @@ Install on your Mac/Linux host:
 
 ## Setup
 
-1. Boot device to **recovery** with ADB enabled
-2. Run the setup script:
+Boot device to **recovery** with ADB enabled, then run the setup script.
+
+### One-liner (no clone needed)
 
 ```bash
+bash <(curl -sL https://raw.githubusercontent.com/jglasovic/droidian-kirin710/main/setup-device.sh)
+```
+
+### From cloned repo
+
+```bash
+git clone https://github.com/jglasovic/droidian-kirin710.git
+cd droidian-kirin710
 bash setup-device.sh
 ```
 
-The script will:
-- Download `halium-boot.img` from CI (or GitHub release)
-- Download `rootfs.img` from Droidian releases
-- Push `rootfs.img` to device via ADB
-- Ask for WiFi SSID + password
-- Configure all device services (USB network, WiFi, vendor mount)
-- Reboot to fastboot and flash the kernel
+### Interactive flow
 
-3. After reboot:
+The script prompts for each step before doing anything:
+
+```
+=== Droidian Setup for Kirin 710 (SNE-LX1) ===
+
+Checking: adb fastboot curl ... OK
+Waiting for ADB device...
+
+Push rootfs to device? [Y/n]:
+Enable USB SSH (NCM at 10.15.19.82)? [Y/n]:
+Enable WiFi? [y/N]:
+  WiFi SSID: MyNetwork
+  WiFi password: ****
+Mount vendor partition? [y/N]:
+Flash kernel? [Y/n]:
+  Kernel variant:
+    1) headless (SSH-only, no display)
+    2) full-ui  (Phosh desktop)
+  Choose [1]:
+
+=== Plan ===
+  Push rootfs:    yes
+  USB SSH:        yes (10.15.19.82)
+  WiFi:           MyNetwork
+  Vendor mount:   yes (via WiFi)
+  Flash kernel:   headless-kirin710
+Proceed? [Y/n]:
+```
+
+Only selected steps are executed. Kernel variant determines which boot image to download.
+
+### After setup
 
 ```bash
 # SSH over USB
@@ -72,9 +106,9 @@ ssh droidian@10.15.19.82
 
 ### Re-running
 
-The script is re-runnable. If rootfs is already on the device, it will ask whether to overwrite or skip. Use this to:
+The script is re-runnable. Select only the steps you want to repeat:
 - Change WiFi credentials
-- Reflash the kernel
+- Reflash a different kernel variant
 - Reconfigure device services
 
 ### Environment Variables
@@ -87,7 +121,9 @@ The script is re-runnable. If rootfs is already on the device, it will ask wheth
 
 ### GitHub Actions (recommended)
 
-Run **Build halium-boot.img** — select a kernel branch and optionally publish a release.
+Run **Build halium-boot.img** — select a kernel branch (`headless-kirin710` or `full-ui-kirin710`) and optionally publish a release.
+
+Artifacts are named by variant: `halium-boot-headless-kirin710` or `halium-boot-full-ui-kirin710`.
 
 ### Local Build
 

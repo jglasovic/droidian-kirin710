@@ -1,135 +1,287 @@
 #!/usr/bin/env bash
-# setup-device.sh — all-in-one setup for Droidian on Kirin 710 (SNE-LX1)
+# setup-device.sh — interactive setup for Droidian on Kirin 710 (SNE-LX1)
 #
-# Downloads boot image + rootfs, pushes to device, configures WiFi + services,
-# flashes kernel. Device must be in recovery with ADB enabled.
+# Works both from a cloned repo and directly from curl:
+#   bash <(curl -sL https://raw.githubusercontent.com/jglasovic/droidian-kirin710/main/setup-device.sh)
 #
-# Re-runnable: skip rootfs push to just reconfigure WiFi or reflash kernel.
-#
-# Usage:
-#   bash setup-device.sh
-#
+# Prompts for each step upfront, shows a summary, then executes only selected steps.
 # Requires: adb, fastboot, curl on the host.
 # Optional: gh (GitHub CLI) for downloading CI artifacts.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-
 REPO="jglasovic/droidian-kirin710"
 ROOTFS_REPO="droidian-images/droidian"
-BOOT_IMG="halium-boot.img"
 ROOTFS_IMG="rootfs.img"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
 
-# ── Check dependencies ───────────────────────────────────────────────────────
+# ── Working directory ────────────────────────────────────────────────────────
+# When running from curl, BASH_SOURCE[0] won't be a real file — use a temp dir.
+if [ -f "${BASH_SOURCE[0]:-}" ]; then
+    WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    FROM_CURL=false
+else
+    WORK_DIR="$(mktemp -d)"
+    FROM_CURL=true
+    echo "(Running from curl — using temp dir: $WORK_DIR)"
+fi
+cd "$WORK_DIR"
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+# All reads go through /dev/tty so curl|bash works
+ask() {
+    local prompt="$1" default="$2" var="$3"
+    local input
+    if [ "$default" = "Y" ]; then
+        printf "%s [Y/n]: " "$prompt" > /dev/tty
+    else
+        printf "%s [y/N]: " "$prompt" > /dev/tty
+    fi
+    read -r input < /dev/tty
+    input="${input:-$default}"
+    case "$input" in
+        [Yy]*) eval "$var=yes" ;;
+        *)     eval "$var=no" ;;
+    esac
+}
+
+ask_text() {
+    local prompt="$1" var="$2"
+    printf "%s " "$prompt" > /dev/tty
+    read -r input < /dev/tty
+    eval "$var=\"\$input\""
+}
+
+ask_secret() {
+    local prompt="$1" var="$2"
+    printf "%s " "$prompt" > /dev/tty
+    read -rs input < /dev/tty
+    echo > /dev/tty
+    eval "$var=\"\$input\""
+}
+
+die() { echo "[FAIL] $*"; exit 1; }
+
+# ── Banner + dependency check ────────────────────────────────────────────────
+echo ""
+echo "=== Droidian Setup for Kirin 710 (SNE-LX1) ==="
+echo ""
+
+printf "Checking:"
 for cmd in adb fastboot curl; do
     if ! command -v "$cmd" &>/dev/null; then
-        echo "[FAIL] '$cmd' not found. Install it and try again."
-        exit 1
+        echo ""
+        die "'$cmd' not found. Install it and try again."
     fi
+    printf " %s" "$cmd"
 done
+echo " ... OK"
 
-# ── 1. Download halium-boot.img ──────────────────────────────────────────────
-if [ -f "$BOOT_IMG" ]; then
-    echo "[OK] $BOOT_IMG already present ($(du -sh "$BOOT_IMG" | cut -f1)) — skipping download."
-    echo "     Delete it to re-download."
+# ── Wait for device ─────────────────────────────────────────────────────────
+echo ""
+echo "Waiting for ADB device (boot to recovery with ADB enabled)..."
+adb wait-for-device
+echo "Device connected."
+echo ""
+
+# ── Gather choices ───────────────────────────────────────────────────────────
+DO_ROOTFS=""
+DO_USB=""
+DO_WIFI=""
+DO_VENDOR=""
+DO_KERNEL=""
+WIFI_SSID=""
+WIFI_PASS=""
+KERNEL_VARIANT=""
+
+ask "Push rootfs to device?" "Y" DO_ROOTFS
+ask "Enable USB SSH (NCM at 10.15.19.82)?" "Y" DO_USB
+
+ask "Enable WiFi?" "N" DO_WIFI
+if [ "$DO_WIFI" = "yes" ]; then
+    ask_text "  WiFi SSID:" WIFI_SSID
+    ask_secret "  WiFi password:" WIFI_PASS
+    if [ -z "$WIFI_SSID" ] || [ -z "$WIFI_PASS" ]; then
+        die "WiFi SSID and password are required when WiFi is enabled."
+    fi
+    # WiFi auto-includes vendor mount
+    DO_VENDOR="yes"
 else
-    echo "[*] Downloading $BOOT_IMG..."
-    DOWNLOADED=false
+    ask "Mount vendor partition?" "N" DO_VENDOR
+fi
 
-    # Try GitHub releases first (no auth needed)
-    RELEASE_URL=$(curl -sf "https://api.github.com/repos/${REPO}/releases" \
-        | python3 -c "
+ask "Flash kernel?" "Y" DO_KERNEL
+if [ "$DO_KERNEL" = "yes" ]; then
+    echo "  Kernel variant:" > /dev/tty
+    echo "    1) headless (SSH-only, no display)" > /dev/tty
+    echo "    2) full-ui  (Phosh desktop)" > /dev/tty
+    printf "  Choose [1]: " > /dev/tty
+    read -r kv_input < /dev/tty
+    case "${kv_input:-1}" in
+        2) KERNEL_VARIANT="full-ui-kirin710" ;;
+        *) KERNEL_VARIANT="headless-kirin710" ;;
+    esac
+fi
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+BOOT_IMG="halium-boot-${KERNEL_VARIANT}.img"
+
+echo ""
+echo "=== Plan ==="
+printf "  Push rootfs:    %s\n" "$DO_ROOTFS"
+if [ "$DO_USB" = "yes" ]; then
+    printf "  USB SSH:        yes (10.15.19.82)\n"
+else
+    printf "  USB SSH:        no\n"
+fi
+if [ "$DO_WIFI" = "yes" ]; then
+    printf "  WiFi:           %s\n" "$WIFI_SSID"
+    printf "  Vendor mount:   yes (via WiFi)\n"
+else
+    printf "  WiFi:           no\n"
+    printf "  Vendor mount:   %s\n" "$DO_VENDOR"
+fi
+if [ "$DO_KERNEL" = "yes" ]; then
+    printf "  Flash kernel:   %s\n" "$KERNEL_VARIANT"
+else
+    printf "  Flash kernel:   no\n"
+fi
+echo ""
+ask "Proceed?" "Y" CONFIRM
+if [ "$CONFIRM" != "yes" ]; then
+    echo "Aborted."
+    exit 0
+fi
+echo ""
+
+# ── Download rootfs ──────────────────────────────────────────────────────────
+if [ "$DO_ROOTFS" = "yes" ]; then
+    if [ -f "$ROOTFS_IMG" ]; then
+        echo "[OK] $ROOTFS_IMG already present ($(du -sh "$ROOTFS_IMG" | cut -f1)) — skipping download."
+    else
+        echo "[*] Finding latest Droidian rootfs release..."
+        ROOTFS_URL=$(curl -sf "https://api.github.com/repos/${ROOTFS_REPO}/releases/latest" \
+            | python3 -c "import sys,json; assets=json.load(sys.stdin)['assets']; print(next(a['browser_download_url'] for a in assets if 'rootfs-api33-arm64' in a['name'] and a['name'].endswith('.zip')))")
+        echo "[*] Downloading rootfs..."
+        echo "    $ROOTFS_URL"
+        curl -fSL --retry 3 -o rootfs.zip "$ROOTFS_URL"
+        echo "[*] Extracting rootfs.img..."
+        unzip -o rootfs.zip "data/rootfs.img" -d .
+        mv data/rootfs.img "$ROOTFS_IMG"
+        rm -rf data rootfs.zip
+        echo "[OK] $ROOTFS_IMG ($(du -sh "$ROOTFS_IMG" | cut -f1))"
+    fi
+fi
+
+# ── Download boot image (multi-tier) ────────────────────────────────────────
+if [ "$DO_KERNEL" = "yes" ]; then
+    if [ -f "$BOOT_IMG" ]; then
+        echo "[OK] $BOOT_IMG already present ($(du -sh "$BOOT_IMG" | cut -f1)) — skipping download."
+    else
+        echo "[*] Downloading $BOOT_IMG..."
+        DOWNLOADED=false
+
+        # Tier 1: Check for local halium-boot.img (generic name)
+        if [ "$DOWNLOADED" = false ] && [ -f "halium-boot.img" ]; then
+            echo "    Found local halium-boot.img, using as $BOOT_IMG."
+            cp "halium-boot.img" "$BOOT_IMG"
+            DOWNLOADED=true
+        fi
+
+        # Tier 2: GitHub releases — find asset matching variant name
+        if [ "$DOWNLOADED" = false ]; then
+            RELEASE_URL=$(curl -sf "https://api.github.com/repos/${REPO}/releases" \
+                | python3 -c "
 import sys, json
+variant = '${KERNEL_VARIANT}'
 for r in json.load(sys.stdin):
     for a in r.get('assets', []):
-        if a['name'] == 'halium-boot.img':
+        name = a['name']
+        if variant in name and name.endswith('.img'):
+            print(a['browser_download_url'])
+            sys.exit(0)
+        if name == 'halium-boot.img':
             print(a['browser_download_url'])
             sys.exit(0)
 sys.exit(1)
 " 2>/dev/null) && {
-        echo "    Found in GitHub releases."
-        curl -fSL --retry 3 -o "$BOOT_IMG" "$RELEASE_URL"
-        DOWNLOADED=true
-    } || true
-
-    # Fall back to CI artifacts via gh CLI
-    if [ "$DOWNLOADED" = false ]; then
-        if ! command -v gh &>/dev/null; then
-            echo "[FAIL] No release found and 'gh' CLI not installed."
-            echo "       Install gh (brew install gh) or download $BOOT_IMG manually from:"
-            echo "       https://github.com/$REPO/actions"
-            exit 1
+                echo "    Found in GitHub releases."
+                curl -fSL --retry 3 -o "$BOOT_IMG" "$RELEASE_URL"
+                DOWNLOADED=true
+            } || true
         fi
-        echo "    No release found, downloading from latest CI artifact..."
-        RUN_ID=$(gh run list -R "$REPO" -w "Build halium-boot.img" -s completed -L 1 --json databaseId -q '.[0].databaseId')
-        if [ -z "$RUN_ID" ]; then
-            echo "[FAIL] No completed CI runs found."
-            exit 1
+
+        # Tier 3: CI artifacts via gh — variant-named artifact
+        if [ "$DOWNLOADED" = false ] && command -v gh &>/dev/null; then
+            echo "    Trying CI artifact: halium-boot-${KERNEL_VARIANT}..."
+            RUN_ID=$(gh run list -R "$REPO" -w "Build halium-boot.img" -s completed -L 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+            if [ -n "$RUN_ID" ]; then
+                if gh run download "$RUN_ID" -R "$REPO" -n "halium-boot-${KERNEL_VARIANT}" -D . 2>/dev/null; then
+                    # Artifact may contain halium-boot.img inside
+                    if [ -f "halium-boot.img" ] && [ ! -f "$BOOT_IMG" ]; then
+                        mv "halium-boot.img" "$BOOT_IMG"
+                    fi
+                    [ -f "$BOOT_IMG" ] && DOWNLOADED=true
+                fi
+            fi
         fi
-        gh run download "$RUN_ID" -R "$REPO" -n halium-boot -D .
-    fi
 
-    if [ ! -f "$BOOT_IMG" ]; then
-        echo "[FAIL] Download succeeded but $BOOT_IMG not found."
-        exit 1
-    fi
-    echo "[OK] Downloaded $BOOT_IMG ($(du -sh "$BOOT_IMG" | cut -f1))"
-fi
+        # Tier 4: CI artifacts via gh — generic artifact name (warn)
+        if [ "$DOWNLOADED" = false ] && command -v gh &>/dev/null; then
+            echo "    Trying CI artifact: halium-boot (generic)..."
+            RUN_ID=$(gh run list -R "$REPO" -w "Build halium-boot.img" -s completed -L 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+            if [ -n "$RUN_ID" ]; then
+                if gh run download "$RUN_ID" -R "$REPO" -n "halium-boot" -D . 2>/dev/null; then
+                    if [ -f "halium-boot.img" ]; then
+                        echo "    WARNING: Downloaded generic halium-boot.img — may not match variant '$KERNEL_VARIANT'."
+                        mv "halium-boot.img" "$BOOT_IMG"
+                        DOWNLOADED=true
+                    fi
+                fi
+            fi
+        fi
 
-# ── 2. Download rootfs.img from Droidian releases ───────────────────────────
-if [ -f "$ROOTFS_IMG" ]; then
-    echo "[OK] $ROOTFS_IMG already present ($(du -sh "$ROOTFS_IMG" | cut -f1)) — skipping download."
-    echo "     Delete it to re-download."
-else
-    echo "[*] Finding latest Droidian rootfs release..."
-    ROOTFS_URL=$(curl -sf "https://api.github.com/repos/${ROOTFS_REPO}/releases/latest" \
-        | python3 -c "import sys,json; assets=json.load(sys.stdin)['assets']; print(next(a['browser_download_url'] for a in assets if 'rootfs-api33-arm64' in a['name'] and a['name'].endswith('.zip')))")
-    echo "[*] Downloading rootfs..."
-    echo "    $ROOTFS_URL"
-    curl -fSL --retry 3 -o rootfs.zip "$ROOTFS_URL"
-    echo "[*] Extracting rootfs.img..."
-    unzip -o rootfs.zip "data/rootfs.img" -d .
-    mv data/rootfs.img "$ROOTFS_IMG"
-    rm -rf data rootfs.zip
-    echo "[OK] $ROOTFS_IMG ($(du -sh "$ROOTFS_IMG" | cut -f1))"
-fi
+        # Tier 5: Fail
+        if [ "$DOWNLOADED" = false ]; then
+            die "Could not download $BOOT_IMG.
+       Options:
+         - Place $BOOT_IMG (or halium-boot.img) in the working directory
+         - Create a GitHub release with the boot image
+         - Install 'gh' CLI and authenticate (brew install gh && gh auth login)
+         - Download manually from: https://github.com/$REPO/actions"
+        fi
 
-# ── 3. Push rootfs to device ────────────────────────────────────────────────
-echo ""
-echo "[*] Waiting for ADB device (boot to recovery with ADB enabled)..."
-adb wait-for-device
-
-PUSH_ROOTFS=true
-if adb shell "[ -f /tmpmnt/rootfs.img ]" 2>/dev/null; then
-    echo "    rootfs.img already on device."
-    read -rp "    Overwrite? [y/N] " answer
-    if [[ ! "$answer" =~ ^[Yy]$ ]]; then
-        PUSH_ROOTFS=false
-        echo "    Skipping rootfs push."
+        echo "[OK] $BOOT_IMG ($(du -sh "$BOOT_IMG" | cut -f1))"
     fi
 fi
 
-if [ "$PUSH_ROOTFS" = true ]; then
-    echo "[*] Pushing rootfs.img to device (this takes a few minutes)..."
-    adb push "$ROOTFS_IMG" /tmpmnt/rootfs.img
-    echo "[OK] rootfs.img pushed."
+# ── Push rootfs ──────────────────────────────────────────────────────────────
+if [ "$DO_ROOTFS" = "yes" ]; then
+    PUSH=true
+    if adb shell "[ -f /tmpmnt/rootfs.img ]" 2>/dev/null; then
+        echo "    rootfs.img already on device."
+        ask "    Overwrite?" "N" OVERWRITE
+        [ "$OVERWRITE" != "yes" ] && PUSH=false && echo "    Skipping rootfs push."
+    fi
+
+    if [ "$PUSH" = true ]; then
+        echo "[*] Pushing rootfs.img to device (this takes a few minutes)..."
+        adb push "$ROOTFS_IMG" /tmpmnt/rootfs.img
+        echo "[OK] rootfs.img pushed."
+    fi
 fi
 
-# ── 4. WiFi credentials ─────────────────────────────────────────────────────
-echo ""
-read -rp "[?] WiFi SSID: " WIFI_SSID
-read -rsp "[?] WiFi password: " WIFI_PASS
-echo ""
+# ── Build flags for device-config.sh ─────────────────────────────────────────
+FLAGS=""
+[ "$DO_USB" = "yes" ] && FLAGS="$FLAGS usb"
+[ "$DO_WIFI" = "yes" ] && FLAGS="$FLAGS wifi"
+[ "$DO_VENDOR" = "yes" ] && [ "$DO_WIFI" != "yes" ] && FLAGS="$FLAGS vendor"
+FLAGS="${FLAGS# }"  # trim leading space
 
-if [ -z "$WIFI_SSID" ] || [ -z "$WIFI_PASS" ]; then
-    echo "[FAIL] WiFi SSID and password are required."
-    exit 1
-fi
-
-WIFI_COUNTRY="${WIFI_COUNTRY:-SI}"
-TMPCONF=$(mktemp)
-cat > "$TMPCONF" << EOF
+# ── Push WiFi credentials if needed ─────────────────────────────────────────
+if [ "$DO_WIFI" = "yes" ]; then
+    WIFI_COUNTRY="${WIFI_COUNTRY:-SI}"
+    TMPCONF=$(mktemp)
+    cat > "$TMPCONF" << EOF
 ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev
 update_config=1
 p2p_disabled=1
@@ -140,29 +292,53 @@ network={
     psk="${WIFI_PASS}"
 }
 EOF
+    adb push "$TMPCONF" /tmp/wpa_supplicant.conf
+    rm -f "$TMPCONF"
+fi
 
-# ── 5. Configure device ─────────────────────────────────────────────────────
-echo "[*] Pushing config files to device..."
-adb push "$TMPCONF" /tmp/wpa_supplicant.conf
-rm -f "$TMPCONF"
-adb push "$SCRIPT_DIR/device-config.sh" /tmp/device-config.sh
+# ── Configure device ─────────────────────────────────────────────────────────
+if [ -n "$FLAGS" ]; then
+    echo "[*] Configuring device (flags: $FLAGS)..."
 
-echo "[*] Running device configuration..."
-adb shell sh /tmp/device-config.sh
+    # Get device-config.sh — local or remote
+    if [ "$FROM_CURL" = true ] || [ ! -f "device-config.sh" ]; then
+        echo "    Fetching device-config.sh from GitHub..."
+        curl -sfL "${RAW_BASE}/device-config.sh" -o "$WORK_DIR/device-config.sh"
+    fi
 
-# ── 6. Flash kernel ─────────────────────────────────────────────────────────
-echo "[*] Rebooting to fastboot..."
-adb reboot bootloader
+    adb push "$WORK_DIR/device-config.sh" /tmp/device-config.sh
+    adb shell sh /tmp/device-config.sh "$FLAGS"
+else
+    echo "[*] No device configuration selected — skipping."
+fi
 
-echo "[*] Waiting for fastboot device..."
-fastboot wait-for-device 2>/dev/null || sleep 10
+# ── Flash kernel ─────────────────────────────────────────────────────────────
+if [ "$DO_KERNEL" = "yes" ]; then
+    echo "[*] Rebooting to fastboot..."
+    adb reboot bootloader
 
-echo "[*] Flashing $BOOT_IMG..."
-fastboot flash kernel "$BOOT_IMG"
+    echo "[*] Waiting for fastboot device..."
+    fastboot wait-for-device 2>/dev/null || sleep 10
 
+    echo "[*] Flashing $BOOT_IMG..."
+    fastboot flash kernel "$BOOT_IMG"
+fi
+
+# ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo "=== Setup complete ==="
-echo "Device will boot with:"
-echo "  SSH over USB:  ssh droidian@10.15.19.82"
-echo "  WiFi:          $WIFI_SSID"
+if [ "$DO_USB" = "yes" ]; then
+    echo "  SSH over USB:  ssh droidian@10.15.19.82"
+fi
+if [ "$DO_WIFI" = "yes" ]; then
+    echo "  WiFi:          $WIFI_SSID"
+fi
+if [ "$DO_KERNEL" = "yes" ]; then
+    echo "  Kernel:        $KERNEL_VARIANT"
+fi
 echo "  Default password: 1234"
+
+# Clean up temp dir if running from curl
+if [ "$FROM_CURL" = true ]; then
+    rm -rf "$WORK_DIR"
+fi

@@ -2,10 +2,26 @@
 # device-config.sh — configure Droidian rootfs for Kirin 710 (SNE-LX1)
 #
 # Runs on device in recovery via ADB. Pure file writes — no chroot, no dpkg.
-# Expects /tmp/wpa_supplicant.conf to be pushed before running.
+# Accepts flags as $1 to control which steps run.
 #
-# Usage: sh device-config.sh
+# Usage: sh device-config.sh "usb wifi"
+#
+# Flags:
+#   usb     — USB gadget trigger + NCM network service + setup script
+#   wifi    — Vendor mount + Hi1102 init + wpa_supplicant + DHCP + credentials
+#   vendor  — Vendor mount only (without WiFi)
+#
+# Always runs: android-mount unmask
 set -eu
+
+FLAGS="${1:-}"
+
+has_flag() {
+    case " $FLAGS " in
+        *" $1 "*) return 0 ;;
+        *)        return 1 ;;
+    esac
+}
 
 ROOTFS="/tmpmnt/rootfs.img"
 MNT="/mnt"
@@ -29,8 +45,26 @@ mkdir -p "$SYSTEMD/multi-user.target.wants"
 mkdir -p "$SYSTEMD/local-fs.target.wants"
 mkdir -p "$SYSTEMD/local-fs.target.requires"
 
-# ── 1. USB gadget trigger ────────────────────────────────────────────────────
-echo "[1/8] USB gadget trigger..."
+# ── Count steps ──────────────────────────────────────────────────────────────
+TOTAL=1  # android-mount is always step 1
+if has_flag usb; then TOTAL=$((TOTAL + 2)); fi       # gadget trigger + NCM
+if has_flag wifi || has_flag vendor; then TOTAL=$((TOTAL + 1)); fi  # vendor mount
+if has_flag wifi; then TOTAL=$((TOTAL + 4)); fi       # hi1102 + wpa + dhcp + creds
+STEP=0
+
+next_step() {
+    STEP=$((STEP + 1))
+    echo "[$STEP/$TOTAL] $1"
+}
+
+# ── Always: Unmask android-mount service ─────────────────────────────────────
+next_step "Unmasking android-mount..."
+rm -f "$SYSTEMD/android-mount.service"
+ln -sf /lib/systemd/system/android-mount.service "$SYSTEMD/local-fs.target.requires/android-mount.service"
+
+# ── USB: gadget trigger ──────────────────────────────────────────────────────
+if has_flag usb; then
+next_step "USB gadget trigger..."
 cat > "$SYSTEMD/usb-gadget-trigger.service" << 'UNIT'
 [Unit]
 Description=Trigger USB gadget mode via HiSilicon DWC3
@@ -47,9 +81,11 @@ ExecStart=/bin/sh -c 'echo device > /sys/class/dual_role_usb/otg_default/mode 2>
 WantedBy=multi-user.target
 UNIT
 ln -sf /etc/systemd/system/usb-gadget-trigger.service "$SYSTEMD/multi-user.target.wants/usb-gadget-trigger.service"
+fi
 
-# ── 2. USB NCM network ──────────────────────────────────────────────────────
-echo "[2/8] USB NCM network (10.15.19.82/24)..."
+# ── USB: NCM network ────────────────────────────────────────────────────────
+if has_flag usb; then
+next_step "USB NCM network (10.15.19.82/24)..."
 cat > "$SYSTEMD/usb-rndis.service" << 'UNIT'
 [Unit]
 Description=USB NCM Gadget (SSH over USB)
@@ -144,14 +180,11 @@ else
 fi
 SCRIPT
 chmod +x "$MNT/usr/local/sbin/usb-rndis-setup.sh"
+fi
 
-# ── 3. Unmask android-mount service ──────────────────────────────────────────
-echo "[3/8] Unmasking android-mount..."
-rm -f "$SYSTEMD/android-mount.service"
-ln -sf /lib/systemd/system/android-mount.service "$SYSTEMD/local-fs.target.requires/android-mount.service"
-
-# ── 4. Vendor partition mount ────────────────────────────────────────────────
-echo "[4/8] Vendor partition mount..."
+# ── Vendor mount (needed by WiFi, or standalone) ────────────────────────────
+if has_flag wifi || has_flag vendor; then
+next_step "Vendor partition mount..."
 cat > "$SYSTEMD/android-system-vendor.mount" << 'UNIT'
 [Unit]
 Description=Mount Android vendor partition
@@ -170,9 +203,11 @@ TimeoutSec=30
 WantedBy=local-fs.target
 UNIT
 ln -sf /etc/systemd/system/android-system-vendor.mount "$SYSTEMD/local-fs.target.wants/android-system-vendor.mount"
+fi
 
-# ── 5. Hi1102 WiFi init ─────────────────────────────────────────────────────
-echo "[5/8] Hi1102 WiFi init..."
+# ── WiFi: Hi1102 init ───────────────────────────────────────────────────────
+if has_flag wifi; then
+next_step "Hi1102 WiFi init..."
 cat > "$SYSTEMD/hisi-wifi-init.service" << 'UNIT'
 [Unit]
 Description=Initialize Hi1102 WiFi
@@ -189,9 +224,11 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 UNIT
 ln -sf /etc/systemd/system/hisi-wifi-init.service "$SYSTEMD/multi-user.target.wants/hisi-wifi-init.service"
+fi
 
-# ── 6. wpa_supplicant interface mode ─────────────────────────────────────────
-echo "[6/8] wpa_supplicant (interface mode, D-Bus masked)..."
+# ── WiFi: wpa_supplicant ────────────────────────────────────────────────────
+if has_flag wifi; then
+next_step "wpa_supplicant (interface mode, D-Bus masked)..."
 # Mask D-Bus mode wpa_supplicant (causes 100% CPU spin with Hi1102)
 ln -sf /dev/null "$SYSTEMD/wpa_supplicant.service"
 
@@ -212,9 +249,11 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 ln -sf /etc/systemd/system/wpa_supplicant-wlan0.service "$SYSTEMD/multi-user.target.wants/wpa_supplicant-wlan0.service"
+fi
 
-# ── 7. WiFi DHCP ────────────────────────────────────────────────────────────
-echo "[7/8] WiFi DHCP..."
+# ── WiFi: DHCP ──────────────────────────────────────────────────────────────
+if has_flag wifi; then
+next_step "WiFi DHCP..."
 cat > "$SYSTEMD/wifi-dhcp.service" << 'UNIT'
 [Unit]
 Description=DHCP client for wlan0
@@ -232,9 +271,11 @@ RestartSec=10
 WantedBy=multi-user.target
 UNIT
 ln -sf /etc/systemd/system/wifi-dhcp.service "$SYSTEMD/multi-user.target.wants/wifi-dhcp.service"
+fi
 
-# ── 8. WiFi credentials ─────────────────────────────────────────────────────
-echo "[8/8] WiFi credentials..."
+# ── WiFi: credentials ──────────────────────────────────────────────────────
+if has_flag wifi; then
+next_step "WiFi credentials..."
 mkdir -p "$MNT/etc/wpa_supplicant"
 if [ -f /tmp/wpa_supplicant.conf ]; then
     cp /tmp/wpa_supplicant.conf "$MNT/etc/wpa_supplicant/wpa_supplicant.conf"
@@ -244,11 +285,20 @@ if [ -f /tmp/wpa_supplicant.conf ]; then
 else
     echo "    WARNING: /tmp/wpa_supplicant.conf not found, skipping WiFi credentials"
 fi
+fi
 
+# ── Summary ──────────────────────────────────────────────────────────────────
 echo ""
 echo "[OK] Device configured. Services enabled:"
-echo "     - USB NCM network (10.15.19.82/24)"
-echo "     - Android system + vendor mount"
-echo "     - Hi1102 WiFi init"
-echo "     - wpa_supplicant (interface mode)"
-echo "     - WiFi DHCP"
+if has_flag usb; then
+    echo "     - USB NCM network (10.15.19.82/24)"
+fi
+echo "     - Android system mount"
+if has_flag wifi || has_flag vendor; then
+    echo "     - Vendor partition mount"
+fi
+if has_flag wifi; then
+    echo "     - Hi1102 WiFi init"
+    echo "     - wpa_supplicant (interface mode)"
+    echo "     - WiFi DHCP"
+fi
