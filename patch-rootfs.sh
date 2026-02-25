@@ -28,16 +28,26 @@ echo "[*] Mounting $ROOTFS at $MNT..."
 mount -o loop "$ROOTFS" "$MNT"
 
 cleanup() {
+  umount "$MNT/dev" 2>/dev/null || true
+  umount "$MNT/sys" 2>/dev/null || true
+  umount "$MNT/proc" 2>/dev/null || true
   umount "$MNT" 2>/dev/null || true
   rmdir "$MNT" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-# ── 1. Enable ADB over USB ──────────────────────────────────────────────────
-echo "[1/5] Enabling ADB over USB..."
+# ── 1. Install and enable ADB over USB ────────────────────────────────────────
+echo "[1/5] Installing and enabling ADB over USB..."
+# Install adbd into rootfs via chroot
+mount --bind /proc "$MNT/proc"
+mount --bind /sys "$MNT/sys"
+mount --bind /dev "$MNT/dev"
+chroot "$MNT" apt-get update -qq
+chroot "$MNT" apt-get install -y --no-install-recommends android-tools-adbd
+umount "$MNT/dev" "$MNT/sys" "$MNT/proc"
 # Mask usb-rndis (NCM gadget) — it takes over the USB gadget config and blocks ADB
 ln -sf /dev/null "$MNT/etc/systemd/system/usb-rndis.service"
-# Replace TCP-only override with one that adds TCP alongside USB
+# Add TCP alongside USB
 mkdir -p "$MNT/etc/systemd/system/adbd.service.d"
 cat > "$MNT/etc/systemd/system/adbd.service.d/tcp.conf" << 'UNIT'
 [Service]
