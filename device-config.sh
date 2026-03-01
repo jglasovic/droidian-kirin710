@@ -70,7 +70,7 @@ if has_flag usb; then TOTAL=$((TOTAL + 3)); fi        # gadget trigger + NCM + a
 if has_flag wifi || has_flag vendor; then TOTAL=$((TOTAL + 1)); fi  # vendor mount
 if has_flag wifi; then TOTAL=$((TOTAL + 4)); fi        # hi1102 + wpa + dhcp + creds
 if has_flag fixmac; then TOTAL=$((TOTAL + 1)); fi      # lock WiFi MAC
-if has_flag headless; then TOTAL=$((TOTAL + 3)); fi    # mask services + performance + display-off
+if has_flag headless; then TOTAL=$((TOTAL + 5)); fi    # charger + zram + mask services + performance + display-off
 STEP=0
 
 next_step() {
@@ -477,6 +477,45 @@ echo ""; echo "=== boot-debug done ==="
 SCRIPT
 chmod +x "$MNT/usr/local/sbin/boot-debug.sh"
 
+# ── Headless: disable battery charging (no battery, external PSU) ─────────────
+if has_flag headless; then
+next_step "Disable battery charging (external PSU)..."
+cat > "$SYSTEMD/disable-charger.service" << 'UNIT'
+[Unit]
+Description=Disable battery charging (no battery installed)
+After=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "echo 0 > /sys/devices/platform/huawei_charger/enable_charger"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+ln -sf /etc/systemd/system/disable-charger.service "$SYSTEMD/multi-user.target.wants/disable-charger.service"
+fi
+
+# ── Headless: zram swap (compressed RAM, avoids eMMC wear) ───────────────────
+if has_flag headless; then
+next_step "zram swap (1GB, lz4)..."
+cat > "$SYSTEMD/zram-swap.service" << 'UNIT'
+[Unit]
+Description=Configure zram swap (1GB, lz4)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "echo lz4 > /sys/block/zram0/comp_algorithm && echo 1G > /sys/block/zram0/disksize && mkswap /dev/zram0 && swapon -p 100 /dev/zram0"
+ExecStop=/bin/sh -c "swapoff /dev/zram0 && echo 1 > /sys/block/zram0/reset"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+ln -sf /etc/systemd/system/zram-swap.service "$SYSTEMD/multi-user.target.wants/zram-swap.service"
+fi
+
 # ── Headless: mask Android/UI services ────────────────────────────────────────
 if has_flag headless; then
 next_step "Masking unnecessary services (headless server)..."
@@ -616,5 +655,7 @@ if has_flag wifi; then
     echo "     - WiFi DHCP"
 fi
 if has_flag headless; then
+    echo "     - Disable battery charging (external PSU)"
+    echo "     - zram swap (1GB, lz4)"
     echo "     - Display off"
 fi

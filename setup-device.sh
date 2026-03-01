@@ -368,7 +368,7 @@ if [ "$DO_ROOTFS" = "yes" ]; then
     if [ -f "$DEVTOOLS_PAYLOAD" ]; then
         echo "[*] Installing devtools bundle (SSH, git, strace, etc.)..."
         adb push "$DEVTOOLS_PAYLOAD" /tmp/devtools-payload.tar
-        adb shell "cd /mnt && tar -oxf /tmp/devtools-payload.tar"
+        adb shell "cd /mnt && tar -oxf /tmp/devtools-payload.tar; ln -sf /var/cache/package-sideload system-update"
     fi
     if [ -d "$EXTRAS_LOCAL" ] && [ "$(ls "$EXTRAS_LOCAL"/*.deb 2>/dev/null | wc -l)" -gt 0 ]; then
         echo "[*] Installing extras (adbd, dhcpcd)..."
