@@ -245,6 +245,13 @@ ln -sf "out/halium-boot-${BUILD_TAG}.img" halium-boot.img
 echo ""
 echo "[OK] out/halium-boot-${BUILD_TAG}.img ($(du -sh "out/halium-boot-${BUILD_TAG}.img" | cut -f1))"
 echo "[OK] halium-boot.img -> out/halium-boot-${BUILD_TAG}.img"
+
+# ── Build recovery.img ───────────────────────────────────────────────────────
+echo ""
+echo "[*] Building recovery.img..."
+bash build-recovery.sh
+
 echo ""
 echo "Flash with:"
 echo "  fastboot flash kernel halium-boot.img"
+echo "  fastboot flash recovery_ramdisk recovery.img"

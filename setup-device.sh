@@ -65,6 +65,77 @@ ask_secret() {
 
 die() { echo "[FAIL] $*"; exit 1; }
 
+# ── Connection helpers (ADB or telnet fallback) ──────────────────────────────
+CONN_MODE="adb"          # set by detect_connection()
+TELNET_IP="10.15.19.82"
+TELNET_PORT="23"
+CMD_PORT="9999"          # nc command server port (clean scripted access)
+NC_PORT="9998"           # netcat port for file transfers
+
+# Run a shell command on the device
+device_shell() {
+    if [ "$CONN_MODE" = "adb" ]; then
+        adb shell "$@"
+    else
+        # Port 9999: nc -e /bin/sh — clean I/O, no telnet noise
+        printf '%s\nexit\n' "$*" | nc "$TELNET_IP" "$CMD_PORT"
+    fi
+}
+
+# Push a local file to the device
+device_push() {
+    local src="$1" dst="$2"
+    if [ "$CONN_MODE" = "adb" ]; then
+        adb push "$src" "$dst"
+    else
+        local dir
+        dir=$(dirname "$dst")
+        # Ensure destination directory exists
+        device_shell "mkdir -p '$dir'" >/dev/null 2>&1
+        # Start nc listener on device via command server
+        printf 'nc -l -p %s > %s\n' "$NC_PORT" "$dst" | nc "$TELNET_IP" "$CMD_PORT" >/dev/null &
+        local BG=$!
+        sleep 2  # give device nc time to start listening
+        # Transfer file (macOS nc closes when stdin hits EOF)
+        nc "$TELNET_IP" "$NC_PORT" < "$src"
+        sleep 1
+        kill "$BG" 2>/dev/null || true
+        wait "$BG" 2>/dev/null || true
+        echo "[OK] Pushed $(basename "$src") -> $dst"
+    fi
+}
+
+# Push a directory (all files within it)
+device_push_dir() {
+    local src_dir="$1" dst_dir="$2"
+    if [ "$CONN_MODE" = "adb" ]; then
+        adb push "$src_dir"/. "$dst_dir/"
+    else
+        for f in "$src_dir"/*; do
+            [ -f "$f" ] || continue
+            device_push "$f" "$dst_dir/$(basename "$f")"
+        done
+    fi
+}
+
+# Reboot the device
+device_reboot() {
+    local mode="${1:-}"
+    if [ "$CONN_MODE" = "adb" ]; then
+        if [ "$mode" = "bootloader" ]; then
+            adb reboot-bootloader
+        else
+            adb reboot
+        fi
+    else
+        if [ "$mode" = "bootloader" ]; then
+            device_shell "reboot bootloader" >/dev/null 2>&1 || true
+        else
+            device_shell "reboot" >/dev/null 2>&1 || true
+        fi
+    fi
+}
+
 # ── Banner + dependency check ────────────────────────────────────────────────
 echo ""
 echo "=== Droidian Setup for Kirin 710 (SNE-LX1) ==="
@@ -80,11 +151,22 @@ for cmd in adb fastboot curl; do
 done
 echo " ... OK"
 
-# ── Wait for device ─────────────────────────────────────────────────────────
+# ── Wait for device (ADB with telnet fallback) ───────────────────────────────
 echo ""
-echo "Waiting for ADB device (boot to recovery with ADB enabled)..."
-while ! adb devices 2>/dev/null | grep -qE '\t(device|recovery)$'; do sleep 1; done
-echo "Device connected."
+echo "Waiting for device — ADB (5s) then nc fallback at $TELNET_IP:$CMD_PORT..."
+ADB_DEADLINE=$(($(date +%s) + 5))
+CONN_MODE=""
+while [ -z "$CONN_MODE" ]; do
+    if adb devices 2>/dev/null | grep -qE '\t(device|recovery)$'; then
+        CONN_MODE="adb"
+    elif [ "$(date +%s)" -gt "$ADB_DEADLINE" ]; then
+        if nc -z -w2 "$TELNET_IP" "$CMD_PORT" 2>/dev/null; then
+            CONN_MODE="nc"
+        fi
+    fi
+    [ -z "$CONN_MODE" ] && sleep 1
+done
+echo "Device connected via $CONN_MODE."
 echo ""
 
 # ── Gather choices ───────────────────────────────────────────────────────────
@@ -313,16 +395,16 @@ fi
 
 # ── Mount userdata on device ──────────────────────────────────────────────────
 echo "[*] Mounting userdata partition on device..."
-adb shell "mkdir -p /tmpmnt && mount /dev/block/by-name/userdata /tmpmnt 2>/dev/null || true"
+device_shell "mkdir -p /tmpmnt && mount /dev/block/by-name/userdata /tmpmnt 2>/dev/null || mount /dev/mmcblk0p70 /tmpmnt 2>/dev/null || true"
 
 if [ "$DO_ROOTFS" = "yes" ]; then
     PUSH=true
-    if adb shell "[ -f /tmpmnt/rootfs.img ]" 2>/dev/null; then
+    if device_shell "[ -f /tmpmnt/rootfs.img ]" 2>/dev/null; then
         echo "    rootfs.img already on device."
         ask "    Overwrite?" "N" OVERWRITE
         if [ "$OVERWRITE" = "yes" ]; then
             echo "[*] Wiping userdata partition..."
-            adb shell "rm -rf /tmpmnt/*"
+            device_shell "rm -rf /tmpmnt/*"
             echo "[OK] Userdata wiped."
         else
             PUSH=false
@@ -332,7 +414,7 @@ if [ "$DO_ROOTFS" = "yes" ]; then
 
     if [ "$PUSH" = true ]; then
         echo "[*] Pushing rootfs.img to device (this takes a few minutes)..."
-        adb push "$ROOTFS_IMG" /tmpmnt/rootfs.img
+        device_push "$ROOTFS_IMG" /tmpmnt/rootfs.img
         echo "[OK] rootfs.img pushed."
     fi
 
@@ -342,7 +424,7 @@ if [ "$DO_ROOTFS" = "yes" ]; then
     # Recovery has mkfs.ext4 but no resize2fs, so we create a new larger image
     # and copy the contents over.
     echo "[*] Expanding rootfs to 56GB on device (this takes a minute)..."
-    adb shell "
+    device_shell "
         CURRENT=\$(stat -c%s /tmpmnt/rootfs.img 2>/dev/null || echo 0)
         TARGET=60129542144  # 56GB
         if [ \"\$CURRENT\" -lt \"\$TARGET\" ]; then
@@ -364,17 +446,17 @@ if [ "$DO_ROOTFS" = "yes" ]; then
     "
 
     # Push sideload payloads into rootfs (installed on first boot)
-    adb shell "mount -o loop /tmpmnt/rootfs.img /mnt"
+    device_shell "mount -o loop /tmpmnt/rootfs.img /mnt"
     if [ -f "$DEVTOOLS_PAYLOAD" ]; then
         echo "[*] Installing devtools bundle (SSH, git, strace, etc.)..."
-        adb push "$DEVTOOLS_PAYLOAD" /tmp/devtools-payload.tar
-        adb shell "cd /mnt && tar -oxf /tmp/devtools-payload.tar; ln -sf /var/cache/package-sideload system-update"
+        device_push "$DEVTOOLS_PAYLOAD" /tmp/devtools-payload.tar
+        device_shell "cd /mnt && tar -oxf /tmp/devtools-payload.tar; ln -sf /var/cache/package-sideload system-update"
     fi
     if [ -d "$EXTRAS_LOCAL" ] && [ "$(ls "$EXTRAS_LOCAL"/*.deb 2>/dev/null | wc -l)" -gt 0 ]; then
         echo "[*] Installing extras (adbd, dhcpcd)..."
-        adb shell "mkdir -p /tmp/extras"
-        adb push "$EXTRAS_LOCAL"/. /tmp/extras/
-        adb shell "
+        device_shell "mkdir -p /tmp/extras"
+        device_push_dir "$EXTRAS_LOCAL" /tmp/extras
+        device_shell "
             BUNDLE=/mnt/var/cache/package-sideload/bundles/kirin710-extras
             mkdir -p \$BUNDLE/archives
             mv /tmp/extras/*.deb \$BUNDLE/archives/
@@ -382,7 +464,7 @@ if [ "$DO_ROOTFS" = "yes" ]; then
             rm -rf /tmp/extras
         "
     fi
-    adb shell "umount /mnt && sync"
+    device_shell "umount /mnt && sync"
     echo "[OK] Sideload bundles staged for first-boot install."
 fi
 
@@ -418,7 +500,7 @@ network={
 ${PSK_LINE}
 }
 EOF
-    adb push "$TMPCONF" /tmp/wpa_supplicant.conf
+    device_push "$TMPCONF" /tmp/wpa_supplicant.conf
     rm -f "$TMPCONF"
 fi
 
@@ -432,8 +514,8 @@ if [ -n "$FLAGS" ]; then
         curl -sfL "${RAW_BASE}/device-config.sh" -o "$WORK_DIR/device-config.sh"
     fi
 
-    adb push "$WORK_DIR/device-config.sh" /tmp/device-config.sh
-    adb shell "sh /tmp/device-config.sh '$FLAGS'"
+    device_push "$WORK_DIR/device-config.sh" /tmp/device-config.sh
+    device_shell "sh /tmp/device-config.sh '$FLAGS'"
 else
     echo "[*] No device configuration selected — skipping."
 fi
@@ -442,13 +524,14 @@ fi
 if [ "$DO_KERNEL" = "yes" ]; then
     echo "[*] Rebooting to fastboot..."
     sleep 10
-    adb reboot-bootloader
+    device_reboot bootloader
 
     echo "[*] Waiting for fastboot device..."
     fastboot wait-for-device 2>/dev/null || sleep 10
 
-    echo "[*] Flashing $BOOT_IMG..."
+    echo "[*] Flashing $BOOT_IMG and recovery..."
     fastboot flash kernel "$BOOT_IMG"
+    fastboot flash recovery_ramdisk recovery.img
     IN_FASTBOOT=true
 fi
 
@@ -490,7 +573,7 @@ if [ "$DID_CHANGE" = true ]; then
     if [ "${IN_FASTBOOT:-false}" = true ]; then
         fastboot reboot
     else
-        adb reboot
+        device_reboot
     fi
 fi
 
