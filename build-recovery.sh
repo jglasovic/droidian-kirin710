@@ -27,9 +27,22 @@ cp "$HALIUM_BIN/busybox" "$RD/bin/busybox"
 chmod 755 "$RD/bin/busybox"
 for tool in sh ash echo cat ls sleep mount umount mkdir rm cp mv ln chmod \
             seq od dd wc awk sed grep head tail cut sort uniq \
-            reboot dmesg date uptime; do
+            dmesg date uptime; do
   ln -sf busybox "$RD/bin/$tool"
 done
+
+# reboot wrapper — busybox reboot signals PID1 which ignores it; use sysrq instead
+cat > "$RD/bin/reboot" << 'REBOOT_EOF'
+#!/bin/sh
+# Write BCB if rebooting to bootloader
+if [ "$1" = "bootloader" ]; then
+  # Android BCB: first 32 bytes = command ("boot-bootloader\0")
+  printf 'boot-bootloader\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' | dd of=/dev/mmcblk0p27 bs=32 count=1 2>/dev/null || true
+fi
+sync
+echo b > /proc/sysrq-trigger
+REBOOT_EOF
+chmod 755 "$RD/bin/reboot"
 for tool in ip telnetd; do
   ln -sf ../bin/busybox "$RD/sbin/$tool"
 done
