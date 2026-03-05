@@ -59,14 +59,13 @@ SYSTEMD="$MNT/etc/systemd/system"
 mkdir -p "$SYSTEMD/multi-user.target.wants"
 mkdir -p "$SYSTEMD/local-fs.target.wants"
 mkdir -p "$SYSTEMD/local-fs.target.requires"
-mkdir -p "$SYSTEMD/sysinit.target.wants"
 
 # Enable persistent journal logging
 mkdir -p "$MNT/var/log/journal"
 chmod 2755 "$MNT/var/log/journal"
 
 # ── Count steps ──────────────────────────────────────────────────────────────
-TOTAL=4  # android-mount + devtools fixups + boot-debug + led always
+TOTAL=3  # android-mount + devtools fixups + boot-debug always
 if has_flag usb; then TOTAL=$((TOTAL + 3)); fi        # gadget trigger + NCM + adbd
 if has_flag wifi || has_flag vendor; then TOTAL=$((TOTAL + 1)); fi  # vendor mount
 if has_flag wifi; then TOTAL=$((TOTAL + 4)); fi        # hi1102 + wpa + dhcp + creds
@@ -478,95 +477,6 @@ echo ""; echo "=== boot-debug done ==="
 SCRIPT
 chmod +x "$MNT/usr/local/sbin/boot-debug.sh"
 
-# ── Always: LED status indicator ──────────────────────────────────────────────
-# Priority: booting=blue, wifi=green, usb-only=yellow, no-conn=red
-next_step "LED status indicators..."
-mkdir -p "$MNT/usr/local/bin"
-mkdir -p "$MNT/etc/NetworkManager/dispatcher.d"
-mkdir -p "$MNT/etc/udev/rules.d"
-
-cat > "$MNT/usr/local/bin/led-set.sh" << 'SCRIPT'
-#!/bin/sh
-# LED states (priority order):
-#   booting    -> blue   (led-boot.service)
-#   wifi       -> green
-#   usb only   -> yellow (red + green)
-#   no conn    -> red
-wifi_up() { ip addr show wlan0 2>/dev/null | grep -q 'inet '; }
-usb_up()  { ip addr show ncm0  2>/dev/null | grep -q 'inet '; }
-for led in red green blue; do
-    echo none > /sys/class/leds/$led/trigger
-    echo 0    > /sys/class/leds/$led/brightness
-done
-if wifi_up; then
-    echo 255 > /sys/class/leds/green/brightness
-elif usb_up; then
-    echo 255 > /sys/class/leds/red/brightness
-    echo 255 > /sys/class/leds/green/brightness
-else
-    echo 255 > /sys/class/leds/red/brightness
-fi
-SCRIPT
-chmod +x "$MNT/usr/local/bin/led-set.sh"
-
-cat > "$MNT/usr/local/bin/led-init.sh" << 'SCRIPT'
-#!/bin/sh
-/usr/local/bin/led-set.sh
-SCRIPT
-chmod +x "$MNT/usr/local/bin/led-init.sh"
-
-cat > "$SYSTEMD/led-boot.service" << 'UNIT'
-[Unit]
-Description=LED boot indicator (blue)
-DefaultDependencies=no
-After=systemd-udev-settle.service
-Before=basic.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/sh -c 'echo none > /sys/class/leds/blue/trigger && echo 255 > /sys/class/leds/blue/brightness'
-RemainAfterExit=yes
-
-[Install]
-WantedBy=sysinit.target
-UNIT
-ln -sf /etc/systemd/system/led-boot.service "$SYSTEMD/sysinit.target.wants/led-boot.service"
-
-cat > "$SYSTEMD/led-ready.service" << 'UNIT'
-[Unit]
-Description=LED ready state
-After=multi-user.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/led-init.sh
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-ln -sf /etc/systemd/system/led-ready.service "$SYSTEMD/multi-user.target.wants/led-ready.service"
-
-cat > "$MNT/etc/NetworkManager/dispatcher.d/99-led-wifi" << 'SCRIPT'
-#!/bin/sh
-IFACE="$1"
-ACTION="$2"
-case "$IFACE" in
-    wlan0|ncm0) ;;
-    *) exit 0 ;;
-esac
-case "$ACTION" in
-    up|down|pre-down|dhcp4-change|connectivity-change)
-        /usr/local/bin/led-set.sh ;;
-esac
-SCRIPT
-chmod +x "$MNT/etc/NetworkManager/dispatcher.d/99-led-wifi"
-
-cat > "$MNT/etc/udev/rules.d/99-led-ncm0.rules" << 'RULES'
-SUBSYSTEM=="net", ACTION=="change", KERNEL=="ncm0", RUN+="/usr/local/bin/led-set.sh"
-SUBSYSTEM=="net", ACTION=="add",    KERNEL=="ncm0", RUN+="/usr/local/bin/led-set.sh"
-RULES
-
 # ── Headless: disable battery charging (no battery, external PSU) ─────────────
 if has_flag headless; then
 next_step "Disable battery charging (external PSU)..."
@@ -736,7 +646,6 @@ if has_flag usb; then
     echo "     - adbd TCP:5555"
 fi
 echo "     - Android system mount"
-echo "     - LED status (blue=boot, green=wifi, yellow=usb, red=no-conn)"
 if has_flag wifi || has_flag vendor; then
     echo "     - Vendor partition mount"
 fi
