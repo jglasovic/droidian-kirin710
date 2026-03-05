@@ -520,6 +520,51 @@ else
     echo "[*] No device configuration selected — skipping."
 fi
 
+# ── Download recovery image ───────────────────────────────────────────────────
+if [ "$DO_KERNEL" = "yes" ]; then
+    if [ -f "recovery.img" ]; then
+        echo "[OK] recovery.img already present ($(du -sh recovery.img | cut -f1)) — skipping download."
+    else
+        echo "[*] Downloading recovery.img..."
+        RECOVERY_DOWNLOADED=false
+
+        # Tier 1: GitHub releases
+        if [ "$RECOVERY_DOWNLOADED" = false ]; then
+            RECOVERY_URL=$(curl -sf "https://api.github.com/repos/${REPO}/releases" \
+                | python3 -c "
+import sys, json
+for r in json.load(sys.stdin):
+    for a in r.get('assets', []):
+        if a['name'] == 'recovery.img':
+            print(a['browser_download_url'])
+            sys.exit(0)
+sys.exit(1)
+" 2>/dev/null) && {
+                curl -fSL --retry 3 -o recovery.img "$RECOVERY_URL"
+                RECOVERY_DOWNLOADED=true
+            } || true
+        fi
+
+        # Tier 2: CI artifacts via gh
+        if [ "$RECOVERY_DOWNLOADED" = false ] && command -v gh &>/dev/null; then
+            RUN_ID=$(gh run list -R "$REPO" -w "Build halium-boot.img" -s completed -L 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+            if [ -n "$RUN_ID" ]; then
+                gh run download "$RUN_ID" -R "$REPO" -n "recovery" -D . 2>/dev/null && \
+                    [ -f "recovery.img" ] && RECOVERY_DOWNLOADED=true || true
+            fi
+        fi
+
+        if [ "$RECOVERY_DOWNLOADED" = false ]; then
+            die "Could not download recovery.img.
+       Options:
+         - Place recovery.img in the working directory
+         - Create a GitHub release with recovery.img as an asset
+         - Build locally: bash build-bootimg.sh"
+        fi
+        echo "[OK] recovery.img ($(du -sh recovery.img | cut -f1))"
+    fi
+fi
+
 # ── Flash kernel ─────────────────────────────────────────────────────────────
 if [ "$DO_KERNEL" = "yes" ]; then
     echo "[*] Rebooting to fastboot..."
