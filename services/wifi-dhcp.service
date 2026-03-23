@@ -1,0 +1,16 @@
+[Unit]
+Description=DHCP client for wlan0
+After=wpa_supplicant-wlan0.service
+Requires=wpa_supplicant-wlan0.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sh -c 'sleep 5'
+ExecStart=/bin/sh -c 'if command -v dhclient >/dev/null 2>&1; then exec dhclient -v -4 wlan0; elif command -v dhcpcd >/dev/null 2>&1; then exec dhcpcd -B -4 wlan0; elif command -v udhcpc >/dev/null 2>&1; then exec udhcpc -i wlan0; else echo "No DHCP client found" > /dev/kmsg; exit 1; fi'
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

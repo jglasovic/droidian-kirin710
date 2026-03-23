@@ -1,0 +1,13 @@
+[Unit]
+Description=Boot debug — capture system state after boot
+After=multi-user.target usb-rndis.service hisi-wifi-init.service wpa_supplicant-wlan0.service wifi-dhcp.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 60
+ExecStart=/usr/local/sbin/boot-debug.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

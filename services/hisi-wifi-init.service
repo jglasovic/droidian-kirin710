@@ -1,0 +1,13 @@
+[Unit]
+Description=Initialize Hi1102 WiFi
+After=android-system-vendor.mount
+Before=wpa_supplicant-wlan0.service NetworkManager.service
+Requires=android-system-vendor.mount
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "echo init > /sys/hisys/boot/plat && sleep 2 && echo init > /sys/hisys/boot/wifi && sleep 3"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

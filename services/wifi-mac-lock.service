@@ -1,0 +1,13 @@
+[Unit]
+Description=Lock WiFi MAC address
+After=hisi-wifi-init.service
+Before=wpa_supplicant-wlan0.service
+Requires=hisi-wifi-init.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/wifi-mac-lock.sh
+
+[Install]
+WantedBy=multi-user.target

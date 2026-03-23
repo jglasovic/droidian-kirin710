@@ -508,11 +508,33 @@ fi
 if [ -n "$FLAGS" ]; then
     echo "[*] Configuring device (flags: $FLAGS)..."
 
-    # Get device-config.sh — local or remote
+    # Get device-config.sh, services/, scripts/ — local or remote
     if [ "$FROM_CURL" = true ] || [ ! -f "device-config.sh" ]; then
         echo "    Fetching device-config.sh from GitHub..."
         curl -sfL "${RAW_BASE}/device-config.sh" -o "$WORK_DIR/device-config.sh"
+        echo "    Fetching services/ and scripts/ from GitHub..."
+        for dir in services scripts; do
+            mkdir -p "$WORK_DIR/$dir"
+            # Fetch file list via GitHub API, then download each file
+            curl -sfL "https://api.github.com/repos/${REPO}/contents/${dir}?ref=main" \
+                | python3 -c "
+import sys, json
+for f in json.load(sys.stdin):
+    if f['type'] == 'file':
+        print(f['name'])
+" | while read -r fname; do
+                curl -sfL "${RAW_BASE}/${dir}/${fname}" -o "$WORK_DIR/$dir/$fname"
+            done
+        done
     fi
+
+    # Pack services/ and scripts/ into a tar and push to device
+    echo "[*] Pushing service files to device..."
+    DEVICE_FILES_TAR=$(mktemp /tmp/device-files.XXXXXX.tar)
+    tar -cf "$DEVICE_FILES_TAR" -C "$WORK_DIR" services scripts
+    device_push "$DEVICE_FILES_TAR" /tmp/device-files.tar
+    device_shell "mkdir -p /tmp/device-files && tar -xf /tmp/device-files.tar -C /tmp/device-files"
+    rm -f "$DEVICE_FILES_TAR"
 
     device_push "$WORK_DIR/device-config.sh" /tmp/device-config.sh
     device_shell "sh /tmp/device-config.sh '$FLAGS'"

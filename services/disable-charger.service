@@ -1,0 +1,11 @@
+[Unit]
+Description=Disable battery charging (no battery installed)
+After=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "echo 0 > /sys/devices/platform/huawei_charger/enable_charger"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

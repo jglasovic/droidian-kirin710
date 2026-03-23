@@ -1,0 +1,15 @@
+[Unit]
+Description=Mount Android vendor partition
+RequiresMountsFor=/android/system
+After=android-mount.service
+Before=local-fs.target
+
+[Mount]
+What=/dev/disk/by-partlabel/vendor_a
+Where=/android/system/vendor
+Type=auto
+Options=ro
+TimeoutSec=30
+
+[Install]
+WantedBy=local-fs.target

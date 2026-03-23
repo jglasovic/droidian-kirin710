@@ -1,0 +1,12 @@
+[Unit]
+Description=CPU and system performance tuning
+DefaultDependencies=no
+After=sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cpu-performance.sh
+
+[Install]
+WantedBy=multi-user.target
