@@ -171,7 +171,6 @@ echo ""
 
 # ── Gather choices ───────────────────────────────────────────────────────────
 DO_ROOTFS=""
-DO_USB=""
 DO_WIFI=""
 DO_WIFI_FIXMAC=""
 DO_VENDOR=""
@@ -181,8 +180,6 @@ WIFI_PASS=""
 KERNEL_VARIANT=""
 
 ask "Push rootfs to device?" "Y" DO_ROOTFS
-ask "Enable USB SSH (NCM at 10.15.19.82)?" "Y" DO_USB
-
 ask "Enable WiFi?" "N" DO_WIFI
 if [ "$DO_WIFI" = "yes" ]; then
     ask_text "  WiFi SSID:" WIFI_SSID
@@ -216,11 +213,7 @@ BOOT_IMG="halium-boot-${KERNEL_VARIANT}.img"
 echo ""
 echo "=== Plan ==="
 printf "  Push rootfs:    %s\n" "$DO_ROOTFS"
-if [ "$DO_USB" = "yes" ]; then
-    printf "  USB SSH:        yes (10.15.19.82)\n"
-else
-    printf "  USB SSH:        no\n"
-fi
+printf "  ADB over USB:   yes (always)\n"
 if [ "$DO_WIFI" = "yes" ]; then
     printf "  WiFi:           %s\n" "$WIFI_SSID"
     printf "  Lock MAC:       %s\n" "$DO_WIFI_FIXMAC"
@@ -470,7 +463,6 @@ fi
 
 # ── Build flags for device-config.sh ─────────────────────────────────────────
 FLAGS=""
-[ "$DO_USB" = "yes" ] && FLAGS="$FLAGS usb"
 [ "$DO_WIFI" = "yes" ] && FLAGS="$FLAGS wifi"
 [ "$DO_WIFI_FIXMAC" = "yes" ] && FLAGS="$FLAGS fixmac"
 [ "$DO_VENDOR" = "yes" ] && [ "$DO_WIFI" != "yes" ] && FLAGS="$FLAGS vendor"
@@ -605,15 +597,8 @@ fi
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo "=== Setup complete ==="
-if [ "$DO_USB" = "yes" ]; then
-    echo ""
-    echo "  USB SSH:  ssh droidian@10.15.19.82"
-    echo "  USB ADB:  adb connect 10.15.19.82:5555"
-    echo ""
-    echo "  NOTE: You must set the host IP on the USB NCM interface first:"
-    echo "    sudo ifconfig en11 10.15.19.1 netmask 255.255.255.0   (macOS)"
-    echo "    sudo ip addr add 10.15.19.1/24 dev usb0               (Linux)"
-fi
+echo ""
+echo "  ADB over USB: adb devices  (available ~110s after boot)"
 if [ "$DO_WIFI" = "yes" ]; then
     echo ""
     echo "  WiFi:     $WIFI_SSID (IP assigned via DHCP)"

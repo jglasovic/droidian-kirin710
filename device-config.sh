@@ -82,7 +82,7 @@ install_script() {
 
 # ── Count steps ───────────────────────────────────────────────────────────────
 TOTAL=3  # android-mount + devtools fixups + boot-debug always
-if has_flag usb; then TOTAL=$((TOTAL + 3)); fi
+TOTAL=$((TOTAL + 1))                                        # adb over usb (always)
 if has_flag wifi || has_flag vendor; then TOTAL=$((TOTAL + 1)); fi
 if has_flag wifi; then TOTAL=$((TOTAL + 4)); fi
 if has_flag fixmac; then TOTAL=$((TOTAL + 1)); fi
@@ -112,34 +112,12 @@ cat > "$MNT/etc/systemd/coredump.conf.d/limit.conf" << 'EOF'
 Storage=none
 EOF
 
-# ── USB: gadget trigger ───────────────────────────────────────────────────────
-if has_flag usb; then
-    next_step "USB gadget trigger..."
-    install_service usb-gadget-trigger.service
-    enable_service  usb-gadget-trigger.service
-fi
-
-# ── USB: NCM network ─────────────────────────────────────────────────────────
-if has_flag usb; then
-    next_step "USB NCM network (10.15.19.82/24)..."
-    install_service usb-rndis.service
-    enable_service  usb-rndis.service
-    install_script  usb-rndis-setup.sh
-fi
-
-# ── USB: adbd TCP ─────────────────────────────────────────────────────────────
-if has_flag usb; then
-    next_step "adbd over TCP:5555..."
-    mkdir -p "$SYSTEMD/adbd.service.d"
-    cat > "$SYSTEMD/adbd.service.d/override.conf" << 'EOF'
-[Service]
-Environment=ADBD_SOCKET=tcp:5555
-ExecStartPre=
-ExecStartPost=
-ExecStopPost=
-EOF
-    ln -sf /usr/lib/systemd/system/adbd.service "$SYSTEMD/multi-user.target.wants/adbd.service" 2>/dev/null || true
-fi
+# ── ADB over USB (always enabled) ────────────────────────────────────────────
+next_step "ADB over USB (FunctionFS)..."
+install_script adbd-udc-wait.sh
+mkdir -p "$SYSTEMD/adbd.service.d"
+cp "$FILES/services/adbd-override.conf" "$SYSTEMD/adbd.service.d/override.conf"
+ln -sf /usr/lib/systemd/system/adbd.service "$SYSTEMD/multi-user.target.wants/adbd.service" 2>/dev/null || true
 
 # ── Vendor mount ──────────────────────────────────────────────────────────────
 if has_flag wifi || has_flag vendor; then
