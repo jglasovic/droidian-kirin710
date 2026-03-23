@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # build-recovery.sh — build a minimal recovery.img for the Huawei Mate 20 Lite (Kirin 710)
-# Flash with: fastboot flash recovery recovery.img
+# Flash with: fastboot flash recovery_ramdisk recovery.img
 set -euo pipefail
 
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -435,4 +435,4 @@ ln -sf "out/recovery-${BUILD_TAG}.img" recovery.img
 echo "[OK] recovery.img -> out/recovery-${BUILD_TAG}.img"
 echo ""
 echo "Flash with:"
-echo "  fastboot flash recovery recovery.img"
+echo "  fastboot flash recovery_ramdisk recovery.img"
