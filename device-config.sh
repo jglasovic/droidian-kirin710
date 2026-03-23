@@ -41,7 +41,12 @@ if [ ! -f "$ROOTFS" ]; then
 fi
 
 echo "[*] Mounting rootfs..."
-mount -o loop "$ROOTFS" "$MNT"
+mkdir -p "$MNT"
+if ! mount -o loop "$ROOTFS" "$MNT"; then
+    echo "[FAIL] mount -o loop $ROOTFS $MNT failed" | tee -a "$LOG"
+    exit 1
+fi
+echo "rootfs mounted at $MNT" >> "$LOG"
 
 cleanup() {
     umount "$MNT" 2>/dev/null || true
