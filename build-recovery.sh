@@ -11,32 +11,71 @@ HALIUM_SBIN="halium-initramfs/sbin"
 HALIUM_LIB="halium-initramfs/lib"
 RD="recovery-initramfs"
 
-# ── Locate adbd binary ────────────────────────────────────────────────────────
-# adbd must be an arm64 Linux binary. Source options (in order):
-#   1. Pre-placed at halium-initramfs/sbin/adbd
-#   2. Extracted from rootfs.img (Linux only — requires loop mount)
+# ── Locate adbd binary and its shared library dependencies ───────────────────
+# adbd requires GLIBC 2.38+ and Android-specific libs.  Recovery ramdisk only
+# has glibc 2.24, so we bundle all required libs under halium-initramfs/adbd-libs/
+# and invoke adbd via its own ld-linux (halium-initramfs/adbd-libs/ld-linux.so).
+#
+# Sources (Linux only, extracted once and cached):
+#   - adbd binary:      sideload-extras/adbd_*_arm64.deb
+#   - Android libs:     sideload-extras/android-lib*.deb + android-libboringssl*.deb
+#   - Standard libs:    system /lib/aarch64-linux-gnu/ (colima / CI Ubuntu)
 ADBD_SRC=""
-if [ -f "$HALIUM_SBIN/adbd" ]; then
+ADBD_LIBS="$HALIUM_SBIN/../adbd-libs"   # halium-initramfs/adbd-libs/
+
+_have_adbd_cached() {
+    [ -f "$HALIUM_SBIN/adbd" ] && [ -f "$ADBD_LIBS/ld-linux.so" ]
+}
+
+if _have_adbd_cached; then
     ADBD_SRC="$HALIUM_SBIN/adbd"
-    echo "[*] Using pre-placed adbd: $ADBD_SRC"
-elif [ "$(uname)" = "Linux" ] && [ -f rootfs.img ]; then
-    echo "[*] Extracting adbd from rootfs.img (requires sudo)..."
-    _ROOTFS_MNT=$(mktemp -d)
-    sudo mount -o loop,ro rootfs.img "$_ROOTFS_MNT"
-    if [ -f "$_ROOTFS_MNT/usr/lib/android-sdk/platform-tools/adbd" ]; then
-        cp "$_ROOTFS_MNT/usr/lib/android-sdk/platform-tools/adbd" "$HALIUM_SBIN/adbd"
-        chmod 755 "$HALIUM_SBIN/adbd"
-        ADBD_SRC="$HALIUM_SBIN/adbd"
-        echo "[OK] adbd extracted and cached at $HALIUM_SBIN/adbd"
+    echo "[*] Using cached adbd + libs"
+elif [ "$(uname)" = "Linux" ] && ls sideload-extras/adbd_*_arm64.deb >/dev/null 2>&1; then
+    echo "[*] Extracting adbd from sideload-extras..."
+    _TMP=$(mktemp -d)
+
+    # adbd binary (extract full deb — selective extraction unreliable with busybox tar)
+    ADBD_DEB=$(ls sideload-extras/adbd_*_arm64.deb | head -1)
+    ar p "$ADBD_DEB" data.tar.xz | tar xJf - -C "$_TMP"
+    cp "$_TMP/usr/sbin/adbd" "$HALIUM_SBIN/adbd"
+    chmod 755 "$HALIUM_SBIN/adbd"
+    ADBD_SRC="$HALIUM_SBIN/adbd"
+
+    # Android-specific shared libs
+    mkdir -p "$ADBD_LIBS"
+    for deb in sideload-extras/android-lib*.deb sideload-extras/android-libboringssl*.deb; do
+        [ -f "$deb" ] || continue
+        ar p "$deb" data.tar.xz | tar xJf - -C "$_TMP" 2>/dev/null || true
+    done
+    find "$_TMP" -name "*.so*" -exec cp --update=none {} "$ADBD_LIBS/" \;
+
+    # Standard libs from Ubuntu (colima/CI) — adbd needs GLIBC 2.38
+    _SYSLIB=/lib/aarch64-linux-gnu
+    for lib in \
+        libbrotlicommon.so.1 libbrotlidec.so.1 libbrotlienc.so.1 \
+        libcap.so.2 libgcc_s.so.1 libgcrypt.so.20 libgpg-error.so.0 \
+        libc.so.6 libm.so.6 libresolv.so.2 libstdc++.so.6 \
+        liblz4.so.1 liblzma.so.5 libz.so.1 libzstd.so.1 \
+        libsystemd.so.0; do
+        src=$(ls ${_SYSLIB}/${lib} /usr/lib/aarch64-linux-gnu/${lib} 2>/dev/null | head -1)
+        [ -n "$src" ] && cp --update=none "$src" "$ADBD_LIBS/$lib" || echo "[WARN] lib not found: $lib"
+    done
+    # libprotobuf has a versioned soname on Ubuntu Noble
+    _proto=$(ls /usr/lib/aarch64-linux-gnu/libprotobuf.so.* 2>/dev/null | grep -v '\.so\.' | head -1 || \
+             ls /usr/lib/aarch64-linux-gnu/libprotobuf.so.* 2>/dev/null | head -1)
+    if [ -n "$_proto" ]; then
+        cp --update=none "$_proto" "$ADBD_LIBS/libprotobuf.so.32"
     else
-        echo "[WARN] adbd not found in rootfs.img — building without ADB"
+        echo "[WARN] libprotobuf not found — install libprotobuf32t64 on build host"
     fi
-    sudo umount "$_ROOTFS_MNT"
-    rmdir "$_ROOTFS_MNT"
+    # ld-linux: adbd's dynamic linker — use this to bypass recovery's old glibc
+    cp "${_SYSLIB}/ld-linux-aarch64.so.1" "$ADBD_LIBS/ld-linux.so"
+    chmod 755 "$ADBD_LIBS/ld-linux.so"
+
+    rm -rf "$_TMP"
+    echo "[OK] adbd and $(ls "$ADBD_LIBS" | wc -l) libs cached in $ADBD_LIBS"
 else
-    echo "[WARN] adbd not available. Building without ADB support."
-    echo "       To enable ADB in recovery, place an arm64 adbd binary at:"
-    echo "       $HALIUM_SBIN/adbd"
+    echo "[WARN] adbd not available (Linux + sideload-extras/adbd_*_arm64.deb required)."
 fi
 
 # Boot image parameters (same as halium-boot)
@@ -93,24 +132,16 @@ ro.debuggable=1
 persist.sys.usb.config=adb
 PROP_EOF
 
-# /adb_keys — authorized host public key (allows passwordless adb connect)
-# Embed the developer's key if present; adbd falls back to auth prompt otherwise.
-ADB_PUBKEY="${HOME}/.android/adbkey.pub"
-if [ -f "$ADB_PUBKEY" ]; then
-    cp "$ADB_PUBKEY" "$RD/adb_keys"
-    chmod 640 "$RD/adb_keys"
-    echo "[*] Embedded ADB public key from $ADB_PUBKEY"
-else
-    touch "$RD/adb_keys"
-    echo "[WARN] ~/.android/adbkey.pub not found — ADB auth will be required"
-    echo "       Run 'adb devices' once on the host to generate the key pair, then rebuild"
-fi
+# /adb_keys — empty; ro.secure=0 makes adbd skip auth entirely so no key needed
+touch "$RD/adb_keys"
 
-# adbd binary
+# adbd binary + bundled libs
 if [ -n "$ADBD_SRC" ]; then
     cp "$ADBD_SRC" "$RD/sbin/adbd"
     chmod 755 "$RD/sbin/adbd"
-    echo "[*] adbd included in recovery"
+    mkdir -p "$RD/lib/adbd"
+    cp "$ADBD_LIBS/"* "$RD/lib/adbd/"
+    echo "[*] adbd included with $(ls "$RD/lib/adbd" | wc -l) bundled libs"
 fi
 
 # ── Write /init ──────────────────────────────────────────────────────────────
@@ -228,8 +259,8 @@ else
     mkdir -p /dev/usb-ffs/adb
     if mount -t functionfs adb /dev/usb-ffs/adb 2>/dev/null; then
       log "STEP8: FFS mounted at /dev/usb-ffs/adb"
-      # Start adbd — writes USB descriptors to ep0; must happen before UDC bind
-      ADB_KEYS=/adb_keys /sbin/adbd &
+      # Start adbd via bundled ld-linux (recovery glibc 2.24 < adbd's GLIBC_2.38 req)
+      /lib/adbd/ld-linux.so --library-path /lib/adbd /sbin/adbd &
       ADBD_PID=$!
       log "STEP8: adbd started (pid=$ADBD_PID), waiting for FFS descriptors..."
       # Poll ep0 for descriptor write (adbd signals ready when ep0 becomes writable)

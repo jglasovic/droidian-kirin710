@@ -65,75 +65,13 @@ ask_secret() {
 
 die() { echo "[FAIL] $*"; exit 1; }
 
-# ── Connection helpers (ADB or telnet fallback) ──────────────────────────────
-CONN_MODE="adb"          # set by detect_connection()
-TELNET_IP="10.15.19.82"
-TELNET_PORT="23"
-CMD_PORT="9999"          # nc command server port (clean scripted access)
-NC_PORT="9998"           # netcat port for file transfers
-
-# Run a shell command on the device
-device_shell() {
-    if [ "$CONN_MODE" = "adb" ]; then
-        adb shell "$@"
-    else
-        # Port 9999: nc -e /bin/sh — clean I/O, no telnet noise
-        printf '%s\nexit\n' "$*" | nc "$TELNET_IP" "$CMD_PORT"
-    fi
-}
-
-# Push a local file to the device
-device_push() {
-    local src="$1" dst="$2"
-    if [ "$CONN_MODE" = "adb" ]; then
-        adb push "$src" "$dst"
-    else
-        local dir
-        dir=$(dirname "$dst")
-        # Ensure destination directory exists
-        device_shell "mkdir -p '$dir'" >/dev/null 2>&1
-        # Start nc listener on device via command server
-        printf 'nc -l -p %s > %s\n' "$NC_PORT" "$dst" | nc "$TELNET_IP" "$CMD_PORT" >/dev/null &
-        local BG=$!
-        sleep 2  # give device nc time to start listening
-        # Transfer file (macOS nc closes when stdin hits EOF)
-        nc "$TELNET_IP" "$NC_PORT" < "$src"
-        sleep 1
-        kill "$BG" 2>/dev/null || true
-        wait "$BG" 2>/dev/null || true
-        echo "[OK] Pushed $(basename "$src") -> $dst"
-    fi
-}
-
-# Push a directory (all files within it)
-device_push_dir() {
-    local src_dir="$1" dst_dir="$2"
-    if [ "$CONN_MODE" = "adb" ]; then
-        adb push "$src_dir"/. "$dst_dir/"
-    else
-        for f in "$src_dir"/*; do
-            [ -f "$f" ] || continue
-            device_push "$f" "$dst_dir/$(basename "$f")"
-        done
-    fi
-}
-
-# Reboot the device
-device_reboot() {
-    local mode="${1:-}"
-    if [ "$CONN_MODE" = "adb" ]; then
-        if [ "$mode" = "bootloader" ]; then
-            adb reboot-bootloader
-        else
-            adb reboot
-        fi
-    else
-        if [ "$mode" = "bootloader" ]; then
-            device_shell "reboot bootloader" >/dev/null 2>&1 || true
-        else
-            device_shell "reboot" >/dev/null 2>&1 || true
-        fi
-    fi
+# ── Device connection helpers (ADB only) ─────────────────────────────────────
+device_shell()    { adb shell "$@"; }
+device_push()     { adb push "$1" "$2"; }
+device_push_dir() { adb push "$1"/. "$2/"; }
+device_reboot()   {
+    if [ "${1:-}" = "bootloader" ]; then adb reboot bootloader
+    else adb reboot; fi
 }
 
 # ── Banner + dependency check ────────────────────────────────────────────────
@@ -151,22 +89,11 @@ for cmd in adb fastboot curl; do
 done
 echo " ... OK"
 
-# ── Wait for device (ADB with telnet fallback) ───────────────────────────────
+# ── Wait for ADB device ───────────────────────────────────────────────────────
 echo ""
-echo "Waiting for device — ADB (5s) then nc fallback at $TELNET_IP:$CMD_PORT..."
-ADB_DEADLINE=$(($(date +%s) + 5))
-CONN_MODE=""
-while [ -z "$CONN_MODE" ]; do
-    if adb devices 2>/dev/null | grep -qE '\t(device|recovery)$'; then
-        CONN_MODE="adb"
-    elif [ "$(date +%s)" -gt "$ADB_DEADLINE" ]; then
-        if nc -z -w2 "$TELNET_IP" "$CMD_PORT" 2>/dev/null; then
-            CONN_MODE="nc"
-        fi
-    fi
-    [ -z "$CONN_MODE" ] && sleep 1
-done
-echo "Device connected via $CONN_MODE."
+echo "Waiting for ADB device..."
+until adb devices 2>/dev/null | grep -qE $'\t(device|recovery)$'; do sleep 1; done
+echo "Device connected."
 echo ""
 
 # ── Gather choices ───────────────────────────────────────────────────────────
