@@ -113,7 +113,7 @@ Before=usb-rndis.service adbd.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'sh -c "echo device > /sys/class/dual_role_usb/otg_default/mode" 2>/dev/null || true; for i in $(seq 1 60); do [ -d /sys/class/udc/ff100000.dwc3 ] && exit 0; sleep 2; done; echo "UDC not ready after 120s" > /dev/kmsg 2>/dev/null; exit 1'
+ExecStart=/bin/sh -c 'echo device > /sys/class/dual_role_usb/otg_default/mode 2>/dev/null || true'
 
 [Install]
 WantedBy=multi-user.target
@@ -196,6 +196,11 @@ echo "CDC-NCM" > $GADGET/configs/c.1/strings/0x409/configuration
 echo 500       > $GADGET/configs/c.1/MaxPower
 ln -s $GADGET/functions/ncm.usb0 $GADGET/configs/c.1/
 
+echo "$UDC" > $GADGET/UDC
+# Brief disconnect/reconnect to force host re-enumeration
+sleep 1
+echo "" > $GADGET/UDC 2>/dev/null || true
+sleep 1
 echo "$UDC" > $GADGET/UDC
 echo "USB CDC-NCM gadget on $UDC" > /dev/kmsg 2>/dev/null || true
 

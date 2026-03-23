@@ -567,16 +567,16 @@ fi
 
 # ── Flash kernel ─────────────────────────────────────────────────────────────
 if [ "$DO_KERNEL" = "yes" ]; then
-    echo "[*] Rebooting to fastboot..."
-    sleep 10
-    device_reboot bootloader
+    # echo "[*] Rebooting to fastboot..."
+    # sleep 10
+    # device_reboot bootloader
 
     echo "[*] Waiting for fastboot device..."
     fastboot wait-for-device 2>/dev/null || sleep 10
 
     echo "[*] Flashing $BOOT_IMG and recovery..."
+    # fastboot flash recovery_ramdisk recovery.img
     fastboot flash kernel "$BOOT_IMG"
-    fastboot flash recovery_ramdisk recovery.img
     IN_FASTBOOT=true
 fi
 
