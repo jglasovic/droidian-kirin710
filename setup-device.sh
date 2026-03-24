@@ -203,7 +203,7 @@ if [ "$DO_ROOTFS" = "yes" ]; then
         PKGINDEX=$(mktemp)
         curl -sfL "${DROIDIAN_PKG_BASE}/dists/rolling/main/binary-arm64/Packages.gz" | gunzip > "$PKGINDEX"
 
-        for pkg in adbd android-liblog android-libbase android-libboringssl android-libcutils dhcpcd-base; do
+        for pkg in dhcpcd-base; do
             STANZA=$(awk "/^Package: ${pkg}\$/,/^\$/" "$PKGINDEX")
             FILE=$(echo "$STANZA" | grep '^Filename:' | head -1 | awk '{print $2}')
             VERSION=$(echo "$STANZA" | grep '^Version:' | head -1 | awk '{print $2}')

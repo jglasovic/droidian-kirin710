@@ -120,9 +120,7 @@ EOF
 # ── ADB over USB via FunctionFS (opt-in, flag: usb) ──────────────────────────
 if has_flag usb; then
     next_step "ADB over USB (FunctionFS)..."
-    install_script adbd-ffs-setup.sh
     install_script adbd-udc-wait.sh
-    install_script adbd-ffs-teardown.sh
     mkdir -p "$SYSTEMD/adbd.service.d"
     cp "$FILES/services/adbd-override.conf" "$SYSTEMD/adbd.service.d/override.conf"
     ln -sf /usr/lib/systemd/system/adbd.service "$SYSTEMD/multi-user.target.wants/adbd.service" 2>/dev/null || true
