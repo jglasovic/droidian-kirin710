@@ -101,6 +101,7 @@ cp "$HALIUM_BIN/busybox" "$RD/bin/busybox"
 chmod 755 "$RD/bin/busybox"
 for tool in sh ash echo cat ls sleep mount umount mkdir rm cp mv ln chmod \
             seq od dd wc awk sed grep head tail cut sort uniq \
+            touch sync stat mknod blkid \
             dmesg date uptime; do
   ln -sf busybox "$RD/bin/$tool"
 done

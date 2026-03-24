@@ -344,14 +344,14 @@ if [ "$DO_ROOTFS" = "yes" ]; then
         adb shell "cd /mnt && tar -oxf /tmp/devtools-payload.tar; ln -sf /var/cache/package-sideload system-update"
     fi
     if [ -d "$EXTRAS_LOCAL" ] && [ "$(ls "$EXTRAS_LOCAL"/*.deb 2>/dev/null | wc -l)" -gt 0 ]; then
-        echo "[*] Installing extras (adbd, dhcpcd)..."
+        echo "[*] Installing extras (dhcpcd)..."
         adb shell "mkdir -p /tmp/extras"
         adb push "$EXTRAS_LOCAL/." /tmp/extras
         adb shell "
             BUNDLE=/mnt/var/cache/package-sideload/bundles/kirin710-extras
             mkdir -p \$BUNDLE/archives
             mv /tmp/extras/*.deb \$BUNDLE/archives/
-            printf 'adbd\ndhcpcd-base\n' > \$BUNDLE/packages
+            printf 'dhcpcd-base\n' > \$BUNDLE/packages
             rm -rf /tmp/extras
         "
     fi
