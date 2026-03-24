@@ -65,14 +65,6 @@ ask_secret() {
 
 die() { echo "[FAIL] $*"; exit 1; }
 
-# ── Device connection helpers (ADB only) ─────────────────────────────────────
-device_shell()    { adb shell "$@"; }
-device_push()     { adb push "$1" "$2"; }
-device_push_dir() { adb push "$1"/. "$2/"; }
-device_reboot()   {
-    if [ "${1:-}" = "bootloader" ]; then adb reboot bootloader
-    else adb reboot; fi
-}
 
 # ── Banner + dependency check ────────────────────────────────────────────────
 echo ""
@@ -315,16 +307,16 @@ fi
 
 # ── Mount userdata on device ──────────────────────────────────────────────────
 echo "[*] Mounting userdata partition on device..."
-device_shell "mkdir -p /tmpmnt && mount /dev/block/by-name/userdata /tmpmnt 2>/dev/null || mount /dev/mmcblk0p70 /tmpmnt 2>/dev/null || true"
+adb shell "mkdir -p /tmpmnt && mount /dev/block/by-name/userdata /tmpmnt 2>/dev/null || mount /dev/mmcblk0p70 /tmpmnt 2>/dev/null || true"
 
 if [ "$DO_ROOTFS" = "yes" ]; then
     PUSH=true
-    if device_shell "[ -f /tmpmnt/rootfs.img ]" 2>/dev/null; then
+    if adb shell "[ -f /tmpmnt/rootfs.img ]" 2>/dev/null; then
         echo "    rootfs.img already on device."
         ask "    Overwrite?" "N" OVERWRITE
         if [ "$OVERWRITE" = "yes" ]; then
             echo "[*] Wiping userdata partition..."
-            device_shell "rm -rf /tmpmnt/*"
+            adb shell "rm -rf /tmpmnt/*"
             echo "[OK] Userdata wiped."
         else
             PUSH=false
@@ -334,30 +326,19 @@ if [ "$DO_ROOTFS" = "yes" ]; then
 
     if [ "$PUSH" = true ]; then
         echo "[*] Pushing rootfs.img to device (this takes a few minutes)..."
-        device_push "$ROOTFS_IMG" /tmpmnt/rootfs.img
+        adb push "$ROOTFS_IMG" /tmpmnt/rootfs.img
         echo "[OK] rootfs.img pushed."
     fi
 
-    # Expand rootfs on device to use most of userdata (~56GB)
-    # Stock rootfs.img is ~3.9GB and nearly full. The img is a fixed-size ext4
-    # filesystem — usable space inside Droidian is limited to the image size.
-    # Recovery has mkfs.ext4 but no resize2fs, so we create a new larger image
-    # and copy the contents over.
-    echo "[*] Expanding rootfs to 56GB on device (this takes a minute)..."
-    device_shell "
+    # Expand rootfs to 56GB using dd (extend file) + resize2fs (grow filesystem)
+    echo "[*] Expanding rootfs to 56GB on device..."
+    adb shell "
         CURRENT=\$(stat -c%s /tmpmnt/rootfs.img 2>/dev/null || echo 0)
         TARGET=60129542144  # 56GB
         if [ \"\$CURRENT\" -lt \"\$TARGET\" ]; then
-            truncate -s 56G /tmpmnt/rootfs-new.img
-            mkfs.ext4 -q /tmpmnt/rootfs-new.img
-            mkdir -p /mnt-old /mnt-new
-            mount -o loop /tmpmnt/rootfs.img /mnt-old
-            mount -o loop /tmpmnt/rootfs-new.img /mnt-new
-            cp -a /mnt-old/. /mnt-new/
-            umount /mnt-old
-            umount /mnt-new
-            mv /tmpmnt/rootfs-new.img /tmpmnt/rootfs.img
-            rmdir /mnt-old /mnt-new 2>/dev/null || true
+            dd if=/dev/zero of=/tmpmnt/rootfs.img bs=1M count=0 seek=57344 2>/dev/null
+            touch /etc/mtab
+            resize2fs -f /tmpmnt/rootfs.img
             sync
             echo 'expanded to 56GB'
         else
@@ -366,17 +347,17 @@ if [ "$DO_ROOTFS" = "yes" ]; then
     "
 
     # Push sideload payloads into rootfs (installed on first boot)
-    device_shell "mount -o loop /tmpmnt/rootfs.img /mnt"
+    adb shell "mknod /dev/loop0 b 7 0 2>/dev/null || true; mkdir -p /mnt; mount -o loop /tmpmnt/rootfs.img /mnt"
     if [ -f "$DEVTOOLS_PAYLOAD" ]; then
         echo "[*] Installing devtools bundle (SSH, git, strace, etc.)..."
-        device_push "$DEVTOOLS_PAYLOAD" /tmp/devtools-payload.tar
-        device_shell "cd /mnt && tar -oxf /tmp/devtools-payload.tar; ln -sf /var/cache/package-sideload system-update"
+        adb push "$DEVTOOLS_PAYLOAD" /tmp/devtools-payload.tar
+        adb shell "cd /mnt && tar -oxf /tmp/devtools-payload.tar; ln -sf /var/cache/package-sideload system-update"
     fi
     if [ -d "$EXTRAS_LOCAL" ] && [ "$(ls "$EXTRAS_LOCAL"/*.deb 2>/dev/null | wc -l)" -gt 0 ]; then
         echo "[*] Installing extras (adbd, dhcpcd)..."
-        device_shell "mkdir -p /tmp/extras"
-        device_push_dir "$EXTRAS_LOCAL" /tmp/extras
-        device_shell "
+        adb shell "mkdir -p /tmp/extras"
+        adb push "$EXTRAS_LOCAL/." /tmp/extras
+        adb shell "
             BUNDLE=/mnt/var/cache/package-sideload/bundles/kirin710-extras
             mkdir -p \$BUNDLE/archives
             mv /tmp/extras/*.deb \$BUNDLE/archives/
@@ -384,7 +365,7 @@ if [ "$DO_ROOTFS" = "yes" ]; then
             rm -rf /tmp/extras
         "
     fi
-    device_shell "umount /mnt && sync"
+    adb shell "umount /mnt && sync"
     echo "[OK] Sideload bundles staged for first-boot install."
 fi
 
@@ -419,7 +400,7 @@ network={
 ${PSK_LINE}
 }
 EOF
-    device_push "$TMPCONF" /tmp/wpa_supplicant.conf
+    adb push "$TMPCONF" /tmp/wpa_supplicant.conf
     rm -f "$TMPCONF"
 fi
 
@@ -451,12 +432,12 @@ for f in json.load(sys.stdin):
     echo "[*] Pushing service files to device..."
     DEVICE_FILES_TAR=$(mktemp /tmp/device-files.XXXXXX.tar)
     tar -cf "$DEVICE_FILES_TAR" -C "$WORK_DIR" services scripts
-    device_push "$DEVICE_FILES_TAR" /tmp/device-files.tar
-    device_shell "mkdir -p /tmp/device-files && tar -xf /tmp/device-files.tar -C /tmp/device-files"
+    adb push "$DEVICE_FILES_TAR" /tmp/device-files.tar
+    adb shell "mkdir -p /tmp/device-files && tar -xf /tmp/device-files.tar -C /tmp/device-files"
     rm -f "$DEVICE_FILES_TAR"
 
-    device_push "$WORK_DIR/device-config.sh" /tmp/device-config.sh
-    device_shell "sh /tmp/device-config.sh '$FLAGS'"
+    adb push "$WORK_DIR/device-config.sh" /tmp/device-config.sh
+    adb shell "sh /tmp/device-config.sh '$FLAGS'"
 else
     echo "[*] No device configuration selected — skipping."
 fi
@@ -552,7 +533,7 @@ if [ "$DID_CHANGE" = true ]; then
     if [ "${IN_FASTBOOT:-false}" = true ]; then
         fastboot reboot
     else
-        device_reboot
+        adb reboot
     fi
 fi
 

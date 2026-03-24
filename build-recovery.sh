@@ -87,8 +87,14 @@ RAMDISK_ADDR="0x11000000"
 # ── Build minimal recovery ramdisk ───────────────────────────────────────────
 echo "[*] Building recovery ramdisk at ${RD}/..."
 rm -rf "$RD"
-mkdir -p "$RD"/{bin,sbin,dev,proc,sys,tmp,cache,run}
+mkdir -p "$RD"/{bin,sbin,lib,dev,proc,sys,tmp,cache,run,mnt}
+mkdir -p "$RD/lib/aarch64-linux-gnu"
 mkdir -p "$RD/dev/usb-ffs/adb"
+# ld-linux and core libs from halium-initramfs (needed by resize2fs)
+cp "$HALIUM_LIB/aarch64-linux-gnu/ld-"*.so "$RD/lib/aarch64-linux-gnu/"
+cp "$HALIUM_LIB/aarch64-linux-gnu/libc"*.so* "$RD/lib/aarch64-linux-gnu/"
+ln -sf ld-2.24.so "$RD/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+ln -sf aarch64-linux-gnu/ld-2.24.so "$RD/lib/ld-linux-aarch64.so.1"
 
 # Copy busybox and create essential symlinks
 cp "$HALIUM_BIN/busybox" "$RD/bin/busybox"
@@ -102,11 +108,8 @@ done
 # reboot wrapper — busybox reboot signals PID1 which ignores it; use sysrq instead
 cat > "$RD/bin/reboot" << 'REBOOT_EOF'
 #!/bin/sh
-# Write BCB if rebooting to bootloader
-if [ "$1" = "bootloader" ]; then
-  # Android BCB: first 32 bytes = command ("boot-bootloader\0")
-  printf 'boot-bootloader\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' | dd of=/dev/mmcblk0p27 bs=32 count=1 2>/dev/null || true
-fi
+# Note: Huawei bootloader does not support software reboot-to-fastboot.
+# To enter fastboot: power off, hold Volume Down + Power.
 sync
 echo b > /proc/sysrq-trigger
 REBOOT_EOF
@@ -123,7 +126,8 @@ mkdir -p "$RD/etc"
 printf 'root::0:0:root:/:/bin/sh\n' > "$RD/etc/passwd"
 printf 'root:x:0:\n' > "$RD/etc/group"
 printf '#!/bin/sh\nexec /bin/sh\n' > "$RD/etc/profile"
-chmod 644 "$RD/etc/passwd" "$RD/etc/group" "$RD/etc/profile"
+touch "$RD/etc/mtab"
+chmod 644 "$RD/etc/passwd" "$RD/etc/group" "$RD/etc/profile" "$RD/etc/mtab"
 
 # /default.prop — makes adbd run in insecure/root mode (no auth prompt)
 cat > "$RD/default.prop" << 'PROP_EOF'
@@ -134,6 +138,16 @@ PROP_EOF
 
 # /adb_keys — empty; ro.secure=0 makes adbd skip auth entirely so no key needed
 touch "$RD/adb_keys"
+
+# e2fsck + resize2fs + their e2fsprogs libs (for rootfs expansion)
+cp "$HALIUM_SBIN/e2fsck"   "$RD/sbin/e2fsck"
+cp "$HALIUM_SBIN/resize2fs" "$RD/sbin/resize2fs"
+chmod 755 "$RD/sbin/e2fsck" "$RD/sbin/resize2fs"
+mkdir -p "$RD/lib/aarch64-linux-gnu"
+for lib in libe2p.so.2 libext2fs.so.2 libcom_err.so.2 libblkid.so.1 libpthread libuuid.so.1; do
+    cp "$HALIUM_LIB/aarch64-linux-gnu/${lib}"* "$RD/lib/aarch64-linux-gnu/"
+done
+echo "[*] e2fsck + resize2fs included in recovery"
 
 # adbd binary + bundled libs
 if [ -n "$ADBD_SRC" ]; then
