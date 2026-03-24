@@ -87,7 +87,7 @@ install_script() {
 
 # ── Count steps ───────────────────────────────────────────────────────────────
 TOTAL=3  # android-mount + devtools fixups + boot-debug always
-TOTAL=$((TOTAL + 1))                                        # adb over usb (always)
+if has_flag usb; then TOTAL=$((TOTAL + 1)); fi
 if has_flag wifi || has_flag vendor; then TOTAL=$((TOTAL + 1)); fi
 if has_flag wifi; then TOTAL=$((TOTAL + 4)); fi
 if has_flag fixmac; then TOTAL=$((TOTAL + 1)); fi
@@ -117,12 +117,16 @@ cat > "$MNT/etc/systemd/coredump.conf.d/limit.conf" << 'EOF'
 Storage=none
 EOF
 
-# ── ADB over USB (always enabled) ────────────────────────────────────────────
-next_step "ADB over USB (FunctionFS)..."
-install_script adbd-udc-wait.sh
-mkdir -p "$SYSTEMD/adbd.service.d"
-cp "$FILES/services/adbd-override.conf" "$SYSTEMD/adbd.service.d/override.conf"
-ln -sf /usr/lib/systemd/system/adbd.service "$SYSTEMD/multi-user.target.wants/adbd.service" 2>/dev/null || true
+# ── ADB over USB via FunctionFS (opt-in, flag: usb) ──────────────────────────
+if has_flag usb; then
+    next_step "ADB over USB (FunctionFS)..."
+    install_script adbd-ffs-setup.sh
+    install_script adbd-udc-wait.sh
+    install_script adbd-ffs-teardown.sh
+    mkdir -p "$SYSTEMD/adbd.service.d"
+    cp "$FILES/services/adbd-override.conf" "$SYSTEMD/adbd.service.d/override.conf"
+    ln -sf /usr/lib/systemd/system/adbd.service "$SYSTEMD/multi-user.target.wants/adbd.service" 2>/dev/null || true
+fi
 
 # ── Vendor mount ──────────────────────────────────────────────────────────────
 if has_flag wifi || has_flag vendor; then
@@ -230,8 +234,7 @@ echo "=== done ===" >> "$LOG"
 echo ""
 echo "[OK] Device configured. Services enabled:"
 if has_flag usb; then
-    echo "     - USB NCM network (10.15.19.82/24)"
-    echo "     - adbd TCP:5555"
+    echo "     - ADB over USB (FunctionFS gadget)"
 fi
 echo "     - Android system mount"
 if has_flag wifi || has_flag vendor; then
