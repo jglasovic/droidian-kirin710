@@ -72,7 +72,7 @@ echo "=== Droidian Setup for Kirin 710 (SNE-LX1) ==="
 echo ""
 
 printf "Checking:"
-for cmd in adb fastboot curl; do
+for cmd in adb curl; do
     if ! command -v "$cmd" &>/dev/null; then
         echo ""
         die "'$cmd' not found. Install it and try again."
@@ -81,9 +81,15 @@ for cmd in adb fastboot curl; do
 done
 echo " ... OK"
 
-# ── Wait for ADB device ───────────────────────────────────────────────────────
+# ── Wait for ADB device in recovery ──────────────────────────────────────────
 echo ""
-echo "Waiting for ADB device..."
+echo "================================================================"
+echo "  Make sure the device is in recovery mode:"
+echo "  - After flashing (bash flash.sh): hold Volume Up + Power while booting"
+echo "  - Connect USB cable to this computer"
+echo "================================================================"
+echo ""
+echo "Waiting for ADB device in recovery..."
 until adb devices 2>/dev/null | grep -qE $'\t(device|recovery)$'; do sleep 1; done
 echo "Device connected."
 echo ""
@@ -93,10 +99,10 @@ DO_ROOTFS=""
 DO_WIFI=""
 DO_WIFI_FIXMAC=""
 DO_VENDOR=""
-DO_KERNEL=""
+DO_USB_ADB=""
+DO_HEADLESS=""
 WIFI_SSID=""
 WIFI_PASS=""
-KERNEL_VARIANT=""
 
 ask "Push rootfs to device?" "Y" DO_ROOTFS
 ask "Enable WiFi?" "N" DO_WIFI
@@ -113,26 +119,15 @@ else
     ask "Mount vendor partition?" "N" DO_VENDOR
 fi
 
-ask "Flash kernel?" "Y" DO_KERNEL
-if [ "$DO_KERNEL" = "yes" ]; then
-    echo "  Kernel variant:" > /dev/tty
-    echo "    1) headless (SSH-only, no display)" > /dev/tty
-    echo "    2) full-ui  (Phosh desktop)" > /dev/tty
-    printf "  Choose [1]: " > /dev/tty
-    read -r kv_input < /dev/tty
-    case "${kv_input:-1}" in
-        2) KERNEL_VARIANT="full-ui-kirin710" ;;
-        *) KERNEL_VARIANT="headless-kirin710" ;;
-    esac
-fi
+ask "Enable ADB over USB?" "Y" DO_USB_ADB
+ask "Headless mode (SSH server, no display)?" "Y" DO_HEADLESS
 
 # ── Summary ──────────────────────────────────────────────────────────────────
-BOOT_IMG="halium-boot-${KERNEL_VARIANT}.img"
-
 echo ""
 echo "=== Plan ==="
 printf "  Push rootfs:    %s\n" "$DO_ROOTFS"
-printf "  ADB over USB:   yes (always)\n"
+printf "  ADB over USB:   %s\n" "$DO_USB_ADB"
+printf "  Headless mode:  %s\n" "$DO_HEADLESS"
 if [ "$DO_WIFI" = "yes" ]; then
     printf "  WiFi:           %s\n" "$WIFI_SSID"
     printf "  Lock MAC:       %s\n" "$DO_WIFI_FIXMAC"
@@ -140,11 +135,6 @@ if [ "$DO_WIFI" = "yes" ]; then
 else
     printf "  WiFi:           no\n"
     printf "  Vendor mount:   %s\n" "$DO_VENDOR"
-fi
-if [ "$DO_KERNEL" = "yes" ]; then
-    printf "  Flash kernel:   %s\n" "$KERNEL_VARIANT"
-else
-    printf "  Flash kernel:   no\n"
 fi
 echo ""
 ask "Proceed?" "Y" CONFIRM
@@ -374,7 +364,8 @@ FLAGS=""
 [ "$DO_WIFI" = "yes" ] && FLAGS="$FLAGS wifi"
 [ "$DO_WIFI_FIXMAC" = "yes" ] && FLAGS="$FLAGS fixmac"
 [ "$DO_VENDOR" = "yes" ] && [ "$DO_WIFI" != "yes" ] && FLAGS="$FLAGS vendor"
-[ "$KERNEL_VARIANT" = "headless-kirin710" ] && FLAGS="$FLAGS headless"
+[ "$DO_USB_ADB" = "yes" ] && FLAGS="$FLAGS usb"
+[ "$DO_HEADLESS" = "yes" ] && FLAGS="$FLAGS headless"
 FLAGS="${FLAGS# }"  # trim leading space
 
 # ── Push WiFi credentials if needed ─────────────────────────────────────────
@@ -442,77 +433,15 @@ else
     echo "[*] No device configuration selected — skipping."
 fi
 
-# ── Download recovery image ───────────────────────────────────────────────────
-if [ "$DO_KERNEL" = "yes" ]; then
-    if [ -f "recovery.img" ]; then
-        echo "[OK] recovery.img already present ($(du -sh recovery.img | cut -f1)) — skipping download."
-    else
-        echo "[*] Downloading recovery.img..."
-        RECOVERY_DOWNLOADED=false
-
-        # Tier 1: GitHub releases
-        if [ "$RECOVERY_DOWNLOADED" = false ]; then
-            RECOVERY_URL=$(curl -sf "https://api.github.com/repos/${REPO}/releases" \
-                | python3 -c "
-import sys, json
-for r in json.load(sys.stdin):
-    for a in r.get('assets', []):
-        if a['name'] == 'recovery.img':
-            print(a['browser_download_url'])
-            sys.exit(0)
-sys.exit(1)
-" 2>/dev/null) && {
-                curl -fSL --retry 3 -o recovery.img "$RECOVERY_URL"
-                RECOVERY_DOWNLOADED=true
-            } || true
-        fi
-
-        # Tier 2: CI artifacts via gh
-        if [ "$RECOVERY_DOWNLOADED" = false ] && command -v gh &>/dev/null; then
-            RUN_ID=$(gh run list -R "$REPO" -w "Build halium-boot.img" -s completed -L 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
-            if [ -n "$RUN_ID" ]; then
-                gh run download "$RUN_ID" -R "$REPO" -n "recovery" -D . 2>/dev/null && \
-                    [ -f "recovery.img" ] && RECOVERY_DOWNLOADED=true || true
-            fi
-        fi
-
-        if [ "$RECOVERY_DOWNLOADED" = false ]; then
-            die "Could not download recovery.img.
-       Options:
-         - Place recovery.img in the working directory
-         - Create a GitHub release with recovery.img as an asset
-         - Build locally: bash build-bootimg.sh"
-        fi
-        echo "[OK] recovery.img ($(du -sh recovery.img | cut -f1))"
-    fi
-fi
-
-# ── Flash kernel ─────────────────────────────────────────────────────────────
-if [ "$DO_KERNEL" = "yes" ]; then
-    # echo "[*] Rebooting to fastboot..."
-    # sleep 10
-    # device_reboot bootloader
-
-    echo "[*] Waiting for fastboot device..."
-    fastboot wait-for-device 2>/dev/null || sleep 10
-
-    echo "[*] Flashing $BOOT_IMG and recovery..."
-    # fastboot flash recovery_ramdisk recovery.img
-    fastboot flash kernel "$BOOT_IMG"
-    IN_FASTBOOT=true
-fi
-
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo "=== Setup complete ==="
 echo ""
-echo "  ADB over USB: adb devices  (available ~110s after boot)"
-if [ "$DO_WIFI" = "yes" ]; then
-    echo ""
-    echo "  WiFi:     $WIFI_SSID (IP assigned via DHCP)"
+if [ "$DO_USB_ADB" = "yes" ]; then
+    echo "  ADB over USB: adb devices  (available ~110s after boot, cable must be connected)"
 fi
-if [ "$DO_KERNEL" = "yes" ]; then
-    echo "  Kernel:   $KERNEL_VARIANT"
+if [ "$DO_WIFI" = "yes" ]; then
+    echo "  WiFi:     $WIFI_SSID (IP assigned via DHCP)"
 fi
 echo ""
 echo "  User:     droidian"
@@ -521,20 +450,15 @@ echo ""
 echo "  The device will reboot twice: first boot installs sideloaded"
 echo "  packages, second boot is ready to use."
 
-# Reboot device if any changes were made
+# Reboot if any changes were made
 DID_CHANGE=false
 [ "$DO_ROOTFS" = "yes" ] && DID_CHANGE=true
 [ -n "$FLAGS" ] && DID_CHANGE=true
-[ "$DO_KERNEL" = "yes" ] && DID_CHANGE=true
 
 if [ "$DID_CHANGE" = true ]; then
     echo ""
     echo "[*] Rebooting device..."
-    if [ "${IN_FASTBOOT:-false}" = true ]; then
-        fastboot reboot
-    else
-        adb reboot
-    fi
+    adb reboot
 fi
 
 # Clean up temp dir if running from curl
