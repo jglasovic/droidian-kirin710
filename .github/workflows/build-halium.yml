@@ -47,7 +47,7 @@ jobs:
             liblz4-1:arm64 liblzma5:arm64 \
             zlib1g:arm64 libzstd1:arm64 \
             libsystemd0:arm64 libprotobuf32t64:arm64 \
-            gcc-aarch64-linux-gnu
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross
 
       - name: Build boot image
         run: bash build-bootimg.sh
