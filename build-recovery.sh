@@ -159,6 +159,24 @@ if [ -n "$ADBD_SRC" ]; then
     echo "[*] adbd included with $(ls "$RD/lib/adbd" | wc -l) bundled libs"
 fi
 
+# propd — minimal property service so 'adb reboot [bootloader|recovery]' works
+PROPD_CACHE="$HALIUM_SBIN/propd"
+if [ -f "$PROPD_CACHE" ]; then
+    echo "[*] Using cached propd"
+elif [ "$(uname)" = "Linux" ]; then
+    echo "[*] Compiling propd..."
+    gcc -O2 -static -o "$PROPD_CACHE" "$WORK_DIR/propd.c" && \
+        echo "[OK] propd compiled ($(du -sh "$PROPD_CACHE" | cut -f1))" || \
+        echo "[WARN] propd compilation failed — adb reboot will not work in recovery"
+else
+    echo "[WARN] propd not available (compile on Linux/CI required)"
+fi
+if [ -f "$PROPD_CACHE" ]; then
+    cp "$PROPD_CACHE" "$RD/sbin/propd"
+    chmod 755 "$RD/sbin/propd"
+    echo "[*] propd included in recovery"
+fi
+
 # ── Write /init ──────────────────────────────────────────────────────────────
 cat > "$RD/init" << 'INITEOF'
 #!/bin/sh
@@ -271,6 +289,14 @@ else
   echo "droidian-recovery" > "$GADGET/strings/0x409/serialnumber"
   echo "Droidian"          > "$GADGET/strings/0x409/manufacturer"
   echo "Recovery"          > "$GADGET/strings/0x409/product"
+
+  # Property service daemon — enables 'adb reboot [bootloader|recovery]'
+  if [ -x /sbin/propd ]; then
+    /sbin/propd &
+    log "STEP8: propd started (pid=$!)"
+  else
+    log "STEP8: propd not found — adb reboot will not work"
+  fi
 
   # ADB function — FunctionFS (adbd writes descriptors before UDC bind)
   HAVE_ADB=0
