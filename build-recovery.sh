@@ -170,6 +170,11 @@ export PATH=/bin:/sbin
 # ── STEP 1: mount virtual filesystems ────────────────────────────────────────
 mount -t proc  proc  /proc  2>/dev/null || true
 mount -t sysfs sysfs /sys   2>/dev/null || true
+# LED: solid purple — recovery mode indicator
+for _c in red green blue; do echo 0 > /sys/class/leds/$_c/brightness 2>/dev/null || true; done
+echo 255 > /sys/class/leds/red/brightness  2>/dev/null || true
+echo 255 > /sys/class/leds/blue/brightness 2>/dev/null || true
+unset _c
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 mkdir -p /dev/pts
 mount -t devpts -o gid=5,mode=620 devpts /dev/pts 2>/dev/null || true
