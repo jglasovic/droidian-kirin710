@@ -57,8 +57,9 @@ led_blink() {
     BLINK_PID=$!
 }
 
-wifi_has_ip() {
-    ip addr show wlan0 2>/dev/null | grep -q 'inet '
+wifi_connected() {
+    ip addr show wlan0 2>/dev/null | grep -q 'inet ' && \
+    wpa_cli -i wlan0 status 2>/dev/null | grep -q 'wpa_state=COMPLETED'
 }
 
 case "${1:-}" in
@@ -75,22 +76,27 @@ led_solid 0 0 255
 sleep 3
 
 # ── Phase 2: blue blink — services loading ────────────────────────────────────
-led_blink 0 0 255 0.5 0.5
+led_blink 0 0 255 1 0.3
 
 while ! systemctl is-active --quiet multi-user.target 2>/dev/null; do
     sleep 1
 done
 
 # ── Phase 3: green blink — services up, waiting for WiFi (min 5s) ────────────
-led_blink 0 255 0 0.5 0.5
+led_blink 0 255 0 1 0.3
 sleep 5
 
-# ── Phase 4: poll WiFi status ─────────────────────────────────────────────────
-while true; do
-    if wifi_has_ip; then
+# ── Phase 4: event-driven WiFi status via netlink ────────────────────────────
+update_wifi_led() {
+    if wifi_connected; then
         led_solid 0 255 0
     else
-        led_blink 255 255 0 1 2
+        led_blink 255 255 0 1 0.3
     fi
-    sleep 10
+}
+
+update_wifi_led
+
+ip monitor address link dev wlan0 | while IFS= read -r _line; do
+    update_wifi_led
 done
