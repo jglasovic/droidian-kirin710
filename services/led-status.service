@@ -1,0 +1,14 @@
+[Unit]
+Description=LED status indicator
+After=basic.target
+Wants=basic.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/led-status.sh
+ExecStop=/usr/local/sbin/led-status.sh stop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=basic.target

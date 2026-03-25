@@ -57,6 +57,7 @@ trap cleanup EXIT
 SYSTEMD="$MNT/etc/systemd/system"
 SBIN="$MNT/usr/local/sbin"
 mkdir -p "$SYSTEMD/multi-user.target.wants"
+mkdir -p "$SYSTEMD/basic.target.wants"
 mkdir -p "$SYSTEMD/local-fs.target.wants"
 mkdir -p "$SYSTEMD/local-fs.target.requires"
 mkdir -p "$SBIN"
@@ -86,7 +87,7 @@ install_script() {
 }
 
 # ── Count steps ───────────────────────────────────────────────────────────────
-TOTAL=3  # android-mount + devtools fixups + boot-debug always
+TOTAL=4  # android-mount + devtools fixups + boot-debug + led always
 if has_flag usb; then TOTAL=$((TOTAL + 1)); fi
 if has_flag wifi || has_flag vendor; then TOTAL=$((TOTAL + 1)); fi
 if has_flag wifi; then TOTAL=$((TOTAL + 4)); fi
@@ -188,6 +189,12 @@ install_service boot-debug.service
 enable_service  boot-debug.service
 install_script  boot-debug.sh
 
+# ── Always: LED status indicator ──────────────────────────────────────────────
+next_step "LED status indicator..."
+install_service led-status.service
+enable_service  led-status.service  basic.target
+install_script  led-status.sh
+
 # ── Headless: disable battery charging ───────────────────────────────────────
 if has_flag headless; then
     next_step "Disable battery charging (external PSU)..."
@@ -240,6 +247,7 @@ if has_flag usb; then
     echo "     - ADB over USB (FunctionFS gadget)"
 fi
 echo "     - Android system mount"
+echo "     - LED status indicator (blue=boot, green=wifi, yellow=no-wifi, red=shutdown)"
 if has_flag wifi || has_flag vendor; then
     echo "     - Vendor partition mount"
 fi
