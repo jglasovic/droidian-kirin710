@@ -9,8 +9,7 @@ This is the **first Droidian port for any Kirin device**.
 | Feature | Status |
 |---------|--------|
 | Boot to Droidian | Working |
-| SSH over USB | Working (CDC-NCM gadget) |
-| ADB over USB | Working (TCP:5555 over NCM) |
+| ADB over USB | Working (FunctionFS gadget, plug/replug to connect) |
 | WiFi (2.4 GHz + 5 GHz) | Working |
 | SSH over WiFi | Working |
 | Display | Working (can be turned off for headless use) |
@@ -25,10 +24,19 @@ This is the **first Droidian port for any Kirin device**.
 ```
 .
 ├── .github/workflows/
-│   └── build-halium.yml       # CI — builds halium-boot.img (kernel + initramfs)
-├── build-bootimg.sh            # Download kernel + Halium initramfs, patch for Kirin 710, pack boot image
-├── setup-device.sh             # Interactive setup: download images, push rootfs, configure device, flash kernel
-└── device-config.sh            # On-device config script (flag-based, pure file writes into mounted rootfs)
+│   └── build-halium.yml       # CI — builds halium-boot.img (kernel + initramfs) and recovery.img
+├── scripts/                   # Shell scripts installed to /usr/local/sbin on device
+│   ├── adbd-ffs-setup.sh      # Sets up configfs ADB gadget + mounts FunctionFS at boot
+│   ├── adbd-udc-bind.sh       # Binds gadget to UDC when cable is connected (udev-triggered)
+│   ├── boot-debug.sh          # Captures system state after first boot (journald + dmesg)
+│   ├── cpu-performance.sh     # CPU/IO/VM tuning for headless server use
+│   └── wifi-mac-lock.sh       # Locks WiFi MAC address on first boot
+├── services/                  # systemd units and udev rules installed on device
+├── build-bootimg.sh           # Download kernel + Halium initramfs, patch for Kirin 710, pack boot image
+├── build-recovery.sh          # Build recovery ramdisk with ADB + sideload support
+├── flash.sh                   # Download latest CI images and flash to device via fastboot
+├── setup-device.sh            # Interactive setup: push rootfs, configure device services
+└── device-config.sh           # On-device config script (flag-based, pure file writes into mounted rootfs)
 ```
 
 ## Related Repositories
@@ -43,23 +51,39 @@ Install on your Mac/Linux host:
 
 - `adb` + `fastboot` — Android platform tools
 - `curl` — HTTP downloads
-- `gh` (optional) — [GitHub CLI](https://cli.github.com/) for downloading CI artifacts
+- `gh` — [GitHub CLI](https://cli.github.com/) for downloading CI artifacts
+- `sshpass` — non-interactive SSH (used by setup script)
 
 ## Setup
 
-Boot device to **recovery** with ADB enabled, then run the setup script.
+The setup is split into two scripts:
 
-### One-liner (no clone needed)
+1. **`flash.sh`** — downloads the latest CI build of the boot image and recovery, flashes both via fastboot
+2. **`setup-device.sh`** — pushes the Droidian rootfs, configures device services, installs extras
+
+### Step 1 — Flash images
+
+Boot device to **fastboot mode**, then run:
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/jglasovic/droidian-kirin710/main/setup-device.sh)
+bash <(curl -sL https://raw.githubusercontent.com/jglasovic/droidian-kirin710/main/flash.sh)
 ```
 
-### From cloned repo
+Or from a cloned repo:
 
 ```bash
 git clone https://github.com/jglasovic/droidian-kirin710.git
 cd droidian-kirin710
+bash flash.sh
+```
+
+This flashes the headless kernel image and a recovery with ADB + sideload support.
+
+### Step 2 — Configure device
+
+After flashing, the device boots into recovery. Connect a USB cable, wait for ADB, then run:
+
+```bash
 bash setup-device.sh
 ```
 
@@ -70,21 +94,18 @@ The script prompts for each option before doing anything:
 | Option | Default | Description |
 |--------|---------|-------------|
 | Push rootfs | Yes | Downloads Droidian rootfs, expands to 56GB, pushes to device |
-| USB SSH | Yes | CDC-NCM USB network (10.15.19.82) with SSH and ADB over TCP |
+| USB | Yes | ADB over USB via FunctionFS gadget (plug/replug to connect) |
 | WiFi | No | Hi1102 WiFi with wpa_supplicant + DHCP (asks for SSID/password) |
 | Lock MAC | No | Captures WiFi MAC on first boot and locks it permanently |
 | Vendor mount | No | Mounts Android vendor partition (auto-enabled with WiFi) |
-| Flash kernel | Yes | Flashes halium-boot.img — headless or full-ui variant |
-
-In **headless** mode, the script also masks ~30 unnecessary services (Android container, Bluetooth, telephony, desktop UI, print server, etc.) to free resources and let the system boot cleanly. See [Headless Service Management](#headless-service-management) for the full list.
+| Headless | Yes | Masks UI/Android services, enables display-off + performance tuning |
 
 ### What the script does
 
 1. **Downloads** rootfs image, devtools bundle (SSH, git, strace), extras (adbd, dhcpcd), and kernel image
 2. **Pushes rootfs** to device userdata partition, expands from ~4GB to 56GB
 3. **Stages sideload bundles** — devtools tar + extras debs pushed into rootfs for first-boot installation
-4. **Configures services** — USB gadget, WiFi, display-off, masks conflicting/unnecessary services
-5. **Flashes kernel** via fastboot
+4. **Configures services** — ADB gadget, WiFi, display-off, masks conflicting/unnecessary services
 
 ### Boot sequence
 
@@ -96,15 +117,11 @@ After setup, the device reboots twice:
 ### Connecting to the device
 
 ```bash
-# USB SSH (set host IP first)
-sudo ifconfig en11 10.15.19.1 netmask 255.255.255.0   # macOS
-sudo ip addr add 10.15.19.1/24 dev usb0                # Linux
-ssh droidian@10.15.19.82
+# ADB over USB (plug or replug cable after boot)
+adb devices
+adb shell
 
-# USB ADB
-adb connect 10.15.19.82:5555
-
-# WiFi SSH (IP assigned via DHCP — check your router)
+# SSH over WiFi (IP assigned via DHCP — check your router or boot-debug log)
 ssh droidian@<device-wifi-ip>
 ```
 
@@ -112,24 +129,23 @@ Default credentials: `droidian` / `1234`
 
 ### Re-running
 
-The script is re-runnable. Downloaded files are cached locally — select only the steps you want to repeat:
+Both scripts are re-runnable. Downloaded files are cached locally — select only the steps you want to repeat:
 - Change WiFi credentials
-- Reflash a different kernel variant
 - Reconfigure device services
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WIFI_COUNTRY` | `SI` | Country code for WiFi regulatory domain |
+- Re-flash images
 
 ## Technical Details
 
-### USB Networking
+### ADB over USB
 
-The device uses a **CDC-NCM USB gadget** (not RNDIS) for USB networking. The host sees a new network interface (`en11` on macOS, `usb0` on Linux) that must be manually configured with IP `10.15.19.1/24`. The device side is `10.15.19.82/24`.
+The device uses a **FunctionFS ADB gadget** managed via configfs:
 
-ADB runs over TCP:5555 on the same NCM link — no separate USB gadget function needed.
+- **`adbd-ffs-setup.sh`** runs as `ExecStartPre` for adbd — creates the configfs gadget structure and mounts FunctionFS at `/dev/usb-ffs/adb` without requiring a UDC. This lets adbd write its descriptors immediately at boot regardless of whether a cable is connected.
+- **`adbd-udc-bind.sh`** is triggered by udev (`99-adbd-udc.rules`) when a USB Device Controller appears in sysfs (cable connected). It waits for adbd to finish writing FFS descriptors (`ep1` appears), then binds the gadget to the UDC.
+
+This two-part design means ADB works reliably whether the cable is connected before or after boot — just plug or replug the cable and `adb devices` will show the device.
+
+**Kirin 710 quirk**: The HiSilicon `hisi_usb3otg` driver manages a DWC3 dual-role controller that does not auto-switch to device mode. `usb-gadget-trigger.service` writes `device` to the dual-role sysfs node early in boot while the file is still writable.
 
 ### WiFi (Hi1102)
 
@@ -146,13 +162,11 @@ The stock Droidian rootfs image is ~4GB and nearly full. The setup script expand
 ### Devtools Side-Effects
 
 The devtools bundle installs packages that conflict with our setup. The script automatically masks:
-- `usb-tethering.service` — conflicts with NCM gadget
-- `mtp-configfs@.service` — reconfigures USB gadget, tears down NCM
+- `usb-tethering.service` — reconfigures USB gadget, tears down ADB
+- `mtp-configfs@.service` — reconfigures USB gadget, tears down ADB
 - `isc-dhcp-server.service` — DHCP server (not client) that crashes
 - `wpa_supplicant.service` — D-Bus mode causes 100% CPU on Hi1102
 - Coredump storage — disabled to prevent disk fill
-
-The adbd service is overridden (`adbd.service.d/override.conf`) to skip its built-in USB gadget management, since our NCM gadget handles USB and adbd listens on TCP:5555 instead.
 
 ### Headless Service Management
 
@@ -180,7 +194,6 @@ In headless mode, the script masks ~30 services that are unnecessary for a headl
 
 | Service | What it does |
 |---------|-------------|
-| `graphical.target` | Pulls in display manager + desktop |
 | `phosh.service` | Phosh phone shell (the UI) |
 | `accounts-daemon.service` | GUI user account management |
 
@@ -212,11 +225,11 @@ In headless mode, the script masks ~30 services that are unnecessary for a headl
 | `droidian-wcnss-enable.service` | Qualcomm Prima WLAN chip |
 
 **Services kept for headless server use:**
-Core system (dbus, polkit, journald, logind, udevd, timesyncd, resolved), networking (NetworkManager, ssh, adbd), storage (udisks2), hardware monitoring (lm-sensors), and all our custom services (USB NCM, WiFi, display-off, boot-debug, cpu-performance).
+Core system (dbus, polkit, journald, logind, udevd, timesyncd, resolved), networking (NetworkManager, ssh, adbd), storage (udisks2), hardware monitoring (lm-sensors), and all custom services (ADB gadget, WiFi, display-off, boot-debug, cpu-performance).
 
 ### Performance Tuning
 
-In headless mode, a `cpu-performance.service` runs at boot to optimize for server workloads:
+In headless mode, `cpu-performance.service` runs at boot to optimize for server workloads:
 
 | Setting | Default | Tuned | Effect |
 |---------|---------|-------|--------|
