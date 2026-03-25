@@ -245,6 +245,43 @@ ln -sf "out/halium-boot-${BUILD_TAG}.img" halium-boot.img
 echo ""
 echo "[OK] out/halium-boot-${BUILD_TAG}.img ($(du -sh "out/halium-boot-${BUILD_TAG}.img" | cut -f1))"
 echo "[OK] halium-boot.img -> out/halium-boot-${BUILD_TAG}.img"
+
+# ── Download adbd + Android libs for recovery (if not cached) ────────────────
+SIDELOAD_DIR="sideload-extras"
+HALIUM_SBIN="halium-initramfs/sbin"
+ADBD_LIBS="halium-initramfs/adbd-libs"
+if [ -f "$HALIUM_SBIN/adbd" ] && [ -f "$ADBD_LIBS/ld-linux.so" ]; then
+    echo "[OK] adbd cached in $HALIUM_SBIN — skipping download."
+elif [ "$(uname)" = "Linux" ]; then
+    echo "[*] Downloading adbd + Android libs for recovery..."
+    mkdir -p "$SIDELOAD_DIR"
+    DROIDIAN_PKG_BASE="http://releases.droidian.org/snapshots/current"
+    PKGINDEX=$(mktemp)
+    curl -sfL "${DROIDIAN_PKG_BASE}/dists/rolling/main/binary-arm64/Packages.gz" | gunzip > "$PKGINDEX"
+    for pkg in adbd android-liblog android-libbase android-libboringssl android-libcutils; do
+        STANZA=$(awk "/^Package: ${pkg}\$/,/^\$/" "$PKGINDEX")
+        FILE=$(echo "$STANZA" | grep '^Filename:' | head -1 | awk '{print $2}')
+        VERSION=$(echo "$STANZA" | grep '^Version:' | head -1 | awk '{print $2}')
+        ARCH=$(echo "$STANZA" | grep '^Architecture:' | head -1 | awk '{print $2}')
+        if [ -n "$FILE" ]; then
+            CACHE_VER=$(echo "$VERSION" | sed 's/:/%3a/g')
+            DEB_NAME="${pkg}_${CACHE_VER}_${ARCH:-arm64}.deb"
+            echo "    $pkg ($VERSION)"
+            curl -fSL --retry 3 -o "$SIDELOAD_DIR/$DEB_NAME" "${DROIDIAN_PKG_BASE}/${FILE}"
+        else
+            echo "    WARNING: $pkg not found in repo — recovery may lack ADB"
+        fi
+    done
+    rm -f "$PKGINDEX"
+    echo "[OK] Downloaded $(ls "$SIDELOAD_DIR"/*.deb 2>/dev/null | wc -l | tr -d ' ') debs for recovery"
+fi
+
+# ── Build recovery.img ───────────────────────────────────────────────────────
+echo ""
+echo "[*] Building recovery.img..."
+bash build-recovery.sh
+
 echo ""
 echo "Flash with:"
 echo "  fastboot flash kernel halium-boot.img"
+echo "  fastboot flash recovery_ramdisk recovery.img"

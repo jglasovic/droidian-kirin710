@@ -1,0 +1,2 @@
+# Bind ADB USB gadget when a USB Device Controller becomes available (cable connected)
+SUBSYSTEM=="udc", ACTION=="add", RUN+="/usr/local/sbin/adbd-udc-bind.sh"

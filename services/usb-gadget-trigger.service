@@ -1,0 +1,13 @@
+[Unit]
+Description=Trigger USB gadget mode via HiSilicon DWC3
+DefaultDependencies=no
+After=sys-kernel-config.mount
+Before=usb-rndis.service adbd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo device > /sys/class/dual_role_usb/otg_default/mode 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target

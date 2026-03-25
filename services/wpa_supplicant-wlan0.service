@@ -1,0 +1,17 @@
+[Unit]
+Description=WPA supplicant for wlan0
+After=hisi-wifi-init.service
+Requires=hisi-wifi-init.service
+Before=wifi-dhcp.service
+ConditionPathExists=/etc/wpa_supplicant/wpa_supplicant.conf
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/wpa_supplicant -D nl80211 -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

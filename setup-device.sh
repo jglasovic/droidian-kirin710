@@ -65,13 +65,14 @@ ask_secret() {
 
 die() { echo "[FAIL] $*"; exit 1; }
 
+
 # ── Banner + dependency check ────────────────────────────────────────────────
 echo ""
 echo "=== Droidian Setup for Kirin 710 (SNE-LX1) ==="
 echo ""
 
 printf "Checking:"
-for cmd in adb fastboot curl; do
+for cmd in adb curl; do
     if ! command -v "$cmd" &>/dev/null; then
         echo ""
         die "'$cmd' not found. Install it and try again."
@@ -80,27 +81,30 @@ for cmd in adb fastboot curl; do
 done
 echo " ... OK"
 
-# ── Wait for device ─────────────────────────────────────────────────────────
+# ── Wait for ADB device in recovery ──────────────────────────────────────────
 echo ""
-echo "Waiting for ADB device (boot to recovery with ADB enabled)..."
-while ! adb devices 2>/dev/null | grep -qE '\t(device|recovery)$'; do sleep 1; done
+echo "================================================================"
+echo "  Make sure the device is in recovery mode:"
+echo "  - After flashing (bash flash.sh): hold Volume Up + Power while booting"
+echo "  - Connect USB cable to this computer"
+echo "================================================================"
+echo ""
+echo "Waiting for ADB device in recovery..."
+until adb devices 2>/dev/null | grep -qE $'\t(device|recovery)$'; do sleep 1; done
 echo "Device connected."
 echo ""
 
 # ── Gather choices ───────────────────────────────────────────────────────────
 DO_ROOTFS=""
-DO_USB=""
 DO_WIFI=""
 DO_WIFI_FIXMAC=""
 DO_VENDOR=""
-DO_KERNEL=""
+DO_USB_ADB=""
+DO_HEADLESS=""
 WIFI_SSID=""
 WIFI_PASS=""
-KERNEL_VARIANT=""
 
 ask "Push rootfs to device?" "Y" DO_ROOTFS
-ask "Enable USB SSH (NCM at 10.15.19.82)?" "Y" DO_USB
-
 ask "Enable WiFi?" "N" DO_WIFI
 if [ "$DO_WIFI" = "yes" ]; then
     ask_text "  WiFi SSID:" WIFI_SSID
@@ -115,30 +119,15 @@ else
     ask "Mount vendor partition?" "N" DO_VENDOR
 fi
 
-ask "Flash kernel?" "Y" DO_KERNEL
-if [ "$DO_KERNEL" = "yes" ]; then
-    echo "  Kernel variant:" > /dev/tty
-    echo "    1) headless (SSH-only, no display)" > /dev/tty
-    echo "    2) full-ui  (Phosh desktop)" > /dev/tty
-    printf "  Choose [1]: " > /dev/tty
-    read -r kv_input < /dev/tty
-    case "${kv_input:-1}" in
-        2) KERNEL_VARIANT="full-ui-kirin710" ;;
-        *) KERNEL_VARIANT="headless-kirin710" ;;
-    esac
-fi
+ask "Enable ADB over USB?" "Y" DO_USB_ADB
+ask "Headless mode (SSH server, no display)?" "Y" DO_HEADLESS
 
 # ── Summary ──────────────────────────────────────────────────────────────────
-BOOT_IMG="halium-boot-${KERNEL_VARIANT}.img"
-
 echo ""
 echo "=== Plan ==="
 printf "  Push rootfs:    %s\n" "$DO_ROOTFS"
-if [ "$DO_USB" = "yes" ]; then
-    printf "  USB SSH:        yes (10.15.19.82)\n"
-else
-    printf "  USB SSH:        no\n"
-fi
+printf "  ADB over USB:   %s\n" "$DO_USB_ADB"
+printf "  Headless mode:  %s\n" "$DO_HEADLESS"
 if [ "$DO_WIFI" = "yes" ]; then
     printf "  WiFi:           %s\n" "$WIFI_SSID"
     printf "  Lock MAC:       %s\n" "$DO_WIFI_FIXMAC"
@@ -146,11 +135,6 @@ if [ "$DO_WIFI" = "yes" ]; then
 else
     printf "  WiFi:           no\n"
     printf "  Vendor mount:   %s\n" "$DO_VENDOR"
-fi
-if [ "$DO_KERNEL" = "yes" ]; then
-    printf "  Flash kernel:   %s\n" "$KERNEL_VARIANT"
-else
-    printf "  Flash kernel:   no\n"
 fi
 echo ""
 ask "Proceed?" "Y" CONFIRM
@@ -229,91 +213,9 @@ if [ "$DO_ROOTFS" = "yes" ]; then
     fi
 fi
 
-# ── Download boot image (multi-tier) ────────────────────────────────────────
-if [ "$DO_KERNEL" = "yes" ]; then
-    if [ -f "$BOOT_IMG" ]; then
-        echo "[OK] $BOOT_IMG already present ($(du -sh "$BOOT_IMG" | cut -f1)) — skipping download."
-    else
-        echo "[*] Downloading $BOOT_IMG..."
-        DOWNLOADED=false
-
-        # Tier 1: Check for local halium-boot.img (generic name)
-        if [ "$DOWNLOADED" = false ] && [ -f "halium-boot.img" ]; then
-            echo "    Found local halium-boot.img, using as $BOOT_IMG."
-            cp "halium-boot.img" "$BOOT_IMG"
-            DOWNLOADED=true
-        fi
-
-        # Tier 2: GitHub releases — find asset matching variant name
-        if [ "$DOWNLOADED" = false ]; then
-            RELEASE_URL=$(curl -sf "https://api.github.com/repos/${REPO}/releases" \
-                | python3 -c "
-import sys, json
-variant = '${KERNEL_VARIANT}'
-for r in json.load(sys.stdin):
-    for a in r.get('assets', []):
-        name = a['name']
-        if variant in name and name.endswith('.img'):
-            print(a['browser_download_url'])
-            sys.exit(0)
-        if name == 'halium-boot.img':
-            print(a['browser_download_url'])
-            sys.exit(0)
-sys.exit(1)
-" 2>/dev/null) && {
-                echo "    Found in GitHub releases."
-                curl -fSL --retry 3 -o "$BOOT_IMG" "$RELEASE_URL"
-                DOWNLOADED=true
-            } || true
-        fi
-
-        # Tier 3: CI artifacts via gh — variant-named artifact
-        if [ "$DOWNLOADED" = false ] && command -v gh &>/dev/null; then
-            echo "    Trying CI artifact: halium-boot-${KERNEL_VARIANT}..."
-            RUN_ID=$(gh run list -R "$REPO" -w "Build halium-boot.img" -s completed -L 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
-            if [ -n "$RUN_ID" ]; then
-                if gh run download "$RUN_ID" -R "$REPO" -n "halium-boot-${KERNEL_VARIANT}" -D . 2>/dev/null; then
-                    # Artifact may contain halium-boot.img inside
-                    if [ -f "halium-boot.img" ] && [ ! -f "$BOOT_IMG" ]; then
-                        mv "halium-boot.img" "$BOOT_IMG"
-                    fi
-                    [ -f "$BOOT_IMG" ] && DOWNLOADED=true
-                fi
-            fi
-        fi
-
-        # Tier 4: CI artifacts via gh — generic artifact name (warn)
-        if [ "$DOWNLOADED" = false ] && command -v gh &>/dev/null; then
-            echo "    Trying CI artifact: halium-boot (generic)..."
-            RUN_ID=$(gh run list -R "$REPO" -w "Build halium-boot.img" -s completed -L 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
-            if [ -n "$RUN_ID" ]; then
-                if gh run download "$RUN_ID" -R "$REPO" -n "halium-boot" -D . 2>/dev/null; then
-                    if [ -f "halium-boot.img" ]; then
-                        echo "    WARNING: Downloaded generic halium-boot.img — may not match variant '$KERNEL_VARIANT'."
-                        mv "halium-boot.img" "$BOOT_IMG"
-                        DOWNLOADED=true
-                    fi
-                fi
-            fi
-        fi
-
-        # Tier 5: Fail
-        if [ "$DOWNLOADED" = false ]; then
-            die "Could not download $BOOT_IMG.
-       Options:
-         - Place $BOOT_IMG (or halium-boot.img) in the working directory
-         - Create a GitHub release with the boot image
-         - Install 'gh' CLI and authenticate (brew install gh && gh auth login)
-         - Download manually from: https://github.com/$REPO/actions"
-        fi
-
-        echo "[OK] $BOOT_IMG ($(du -sh "$BOOT_IMG" | cut -f1))"
-    fi
-fi
-
 # ── Mount userdata on device ──────────────────────────────────────────────────
 echo "[*] Mounting userdata partition on device..."
-adb shell "mkdir -p /tmpmnt && mount /dev/block/by-name/userdata /tmpmnt 2>/dev/null || true"
+adb shell "mkdir -p /tmpmnt && mount /dev/block/by-name/userdata /tmpmnt 2>/dev/null || mount /dev/mmcblk0p70 /tmpmnt 2>/dev/null || true"
 
 if [ "$DO_ROOTFS" = "yes" ]; then
     PUSH=true
@@ -336,26 +238,15 @@ if [ "$DO_ROOTFS" = "yes" ]; then
         echo "[OK] rootfs.img pushed."
     fi
 
-    # Expand rootfs on device to use most of userdata (~56GB)
-    # Stock rootfs.img is ~3.9GB and nearly full. The img is a fixed-size ext4
-    # filesystem — usable space inside Droidian is limited to the image size.
-    # Recovery has mkfs.ext4 but no resize2fs, so we create a new larger image
-    # and copy the contents over.
-    echo "[*] Expanding rootfs to 56GB on device (this takes a minute)..."
+    # Expand rootfs to 56GB using dd (extend file) + resize2fs (grow filesystem)
+    echo "[*] Expanding rootfs to 56GB on device..."
     adb shell "
         CURRENT=\$(stat -c%s /tmpmnt/rootfs.img 2>/dev/null || echo 0)
         TARGET=60129542144  # 56GB
         if [ \"\$CURRENT\" -lt \"\$TARGET\" ]; then
-            truncate -s 56G /tmpmnt/rootfs-new.img
-            mkfs.ext4 -q /tmpmnt/rootfs-new.img
-            mkdir -p /mnt-old /mnt-new
-            mount -o loop /tmpmnt/rootfs.img /mnt-old
-            mount -o loop /tmpmnt/rootfs-new.img /mnt-new
-            cp -a /mnt-old/. /mnt-new/
-            umount /mnt-old
-            umount /mnt-new
-            mv /tmpmnt/rootfs-new.img /tmpmnt/rootfs.img
-            rmdir /mnt-old /mnt-new 2>/dev/null || true
+            dd if=/dev/zero of=/tmpmnt/rootfs.img bs=1M count=0 seek=57344 2>/dev/null
+            touch /etc/mtab
+            resize2fs -f /tmpmnt/rootfs.img
             sync
             echo 'expanded to 56GB'
         else
@@ -364,7 +255,7 @@ if [ "$DO_ROOTFS" = "yes" ]; then
     "
 
     # Push sideload payloads into rootfs (installed on first boot)
-    adb shell "mount -o loop /tmpmnt/rootfs.img /mnt"
+    adb shell "mknod /dev/loop0 b 7 0 2>/dev/null || true; mkdir -p /mnt; mount -o loop /tmpmnt/rootfs.img /mnt"
     if [ -f "$DEVTOOLS_PAYLOAD" ]; then
         echo "[*] Installing devtools bundle (SSH, git, strace, etc.)..."
         adb push "$DEVTOOLS_PAYLOAD" /tmp/devtools-payload.tar
@@ -373,7 +264,7 @@ if [ "$DO_ROOTFS" = "yes" ]; then
     if [ -d "$EXTRAS_LOCAL" ] && [ "$(ls "$EXTRAS_LOCAL"/*.deb 2>/dev/null | wc -l)" -gt 0 ]; then
         echo "[*] Installing extras (adbd, dhcpcd)..."
         adb shell "mkdir -p /tmp/extras"
-        adb push "$EXTRAS_LOCAL"/. /tmp/extras/
+        adb push "$EXTRAS_LOCAL/." /tmp/extras
         adb shell "
             BUNDLE=/mnt/var/cache/package-sideload/bundles/kirin710-extras
             mkdir -p \$BUNDLE/archives
@@ -388,11 +279,11 @@ fi
 
 # ── Build flags for device-config.sh ─────────────────────────────────────────
 FLAGS=""
-[ "$DO_USB" = "yes" ] && FLAGS="$FLAGS usb"
 [ "$DO_WIFI" = "yes" ] && FLAGS="$FLAGS wifi"
 [ "$DO_WIFI_FIXMAC" = "yes" ] && FLAGS="$FLAGS fixmac"
 [ "$DO_VENDOR" = "yes" ] && [ "$DO_WIFI" != "yes" ] && FLAGS="$FLAGS vendor"
-[ "$KERNEL_VARIANT" = "headless-kirin710" ] && FLAGS="$FLAGS headless"
+[ "$DO_USB_ADB" = "yes" ] && FLAGS="$FLAGS usb"
+[ "$DO_HEADLESS" = "yes" ] && FLAGS="$FLAGS headless"
 FLAGS="${FLAGS# }"  # trim leading space
 
 # ── Push WiFi credentials if needed ─────────────────────────────────────────
@@ -426,11 +317,33 @@ fi
 if [ -n "$FLAGS" ]; then
     echo "[*] Configuring device (flags: $FLAGS)..."
 
-    # Get device-config.sh — local or remote
+    # Get device-config.sh, services/, scripts/ — local or remote
     if [ "$FROM_CURL" = true ] || [ ! -f "device-config.sh" ]; then
         echo "    Fetching device-config.sh from GitHub..."
         curl -sfL "${RAW_BASE}/device-config.sh" -o "$WORK_DIR/device-config.sh"
+        echo "    Fetching services/ and scripts/ from GitHub..."
+        for dir in services scripts; do
+            mkdir -p "$WORK_DIR/$dir"
+            # Fetch file list via GitHub API, then download each file
+            curl -sfL "https://api.github.com/repos/${REPO}/contents/${dir}?ref=main" \
+                | python3 -c "
+import sys, json
+for f in json.load(sys.stdin):
+    if f['type'] == 'file':
+        print(f['name'])
+" | while read -r fname; do
+                curl -sfL "${RAW_BASE}/${dir}/${fname}" -o "$WORK_DIR/$dir/$fname"
+            done
+        done
     fi
+
+    # Pack services/ and scripts/ into a tar and push to device
+    echo "[*] Pushing service files to device..."
+    DEVICE_FILES_TAR=$(mktemp /tmp/device-files.XXXXXX.tar)
+    tar -cf "$DEVICE_FILES_TAR" -C "$WORK_DIR" services scripts
+    adb push "$DEVICE_FILES_TAR" /tmp/device-files.tar
+    adb shell "mkdir -p /tmp/device-files && tar -xf /tmp/device-files.tar -C /tmp/device-files"
+    rm -f "$DEVICE_FILES_TAR"
 
     adb push "$WORK_DIR/device-config.sh" /tmp/device-config.sh
     adb shell "sh /tmp/device-config.sh '$FLAGS'"
@@ -438,38 +351,15 @@ else
     echo "[*] No device configuration selected — skipping."
 fi
 
-# ── Flash kernel ─────────────────────────────────────────────────────────────
-if [ "$DO_KERNEL" = "yes" ]; then
-    echo "[*] Rebooting to fastboot..."
-    sleep 10
-    adb reboot-bootloader
-
-    echo "[*] Waiting for fastboot device..."
-    fastboot wait-for-device 2>/dev/null || sleep 10
-
-    echo "[*] Flashing $BOOT_IMG..."
-    fastboot flash kernel "$BOOT_IMG"
-    IN_FASTBOOT=true
-fi
-
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo "=== Setup complete ==="
-if [ "$DO_USB" = "yes" ]; then
-    echo ""
-    echo "  USB SSH:  ssh droidian@10.15.19.82"
-    echo "  USB ADB:  adb connect 10.15.19.82:5555"
-    echo ""
-    echo "  NOTE: You must set the host IP on the USB NCM interface first:"
-    echo "    sudo ifconfig en11 10.15.19.1 netmask 255.255.255.0   (macOS)"
-    echo "    sudo ip addr add 10.15.19.1/24 dev usb0               (Linux)"
+echo ""
+if [ "$DO_USB_ADB" = "yes" ]; then
+    echo "  ADB over USB: adb devices  (available ~110s after boot, cable must be connected)"
 fi
 if [ "$DO_WIFI" = "yes" ]; then
-    echo ""
     echo "  WiFi:     $WIFI_SSID (IP assigned via DHCP)"
-fi
-if [ "$DO_KERNEL" = "yes" ]; then
-    echo "  Kernel:   $KERNEL_VARIANT"
 fi
 echo ""
 echo "  User:     droidian"
@@ -477,22 +367,6 @@ echo "  Password: 1234"
 echo ""
 echo "  The device will reboot twice: first boot installs sideloaded"
 echo "  packages, second boot is ready to use."
-
-# Reboot device if any changes were made
-DID_CHANGE=false
-[ "$DO_ROOTFS" = "yes" ] && DID_CHANGE=true
-[ -n "$FLAGS" ] && DID_CHANGE=true
-[ "$DO_KERNEL" = "yes" ] && DID_CHANGE=true
-
-if [ "$DID_CHANGE" = true ]; then
-    echo ""
-    echo "[*] Rebooting device..."
-    if [ "${IN_FASTBOOT:-false}" = true ]; then
-        fastboot reboot
-    else
-        adb reboot
-    fi
-fi
 
 # Clean up temp dir if running from curl
 if [ "$FROM_CURL" = true ]; then

@@ -1,0 +1,11 @@
+[Unit]
+Description=Turn off display (headless mode)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "dd if=/dev/zero of=/dev/fb0 bs=4096 count=1024 2>/dev/null; echo 4 > /sys/class/graphics/fb0/blank; echo 0 > /sys/class/leds/lcd_backlight0/brightness"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
