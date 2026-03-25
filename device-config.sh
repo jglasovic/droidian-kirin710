@@ -124,7 +124,8 @@ if has_flag usb; then
     install_script adbd-udc-bind.sh
     mkdir -p "$SYSTEMD/adbd.service.d"
     cp "$FILES/services/adbd-override.conf" "$SYSTEMD/adbd.service.d/override.conf"
-    cp "$FILES/services/99-adbd-udc.rules" /etc/udev/rules.d/99-adbd-udc.rules
+    mkdir -p "$MNT/etc/udev/rules.d"
+    cp "$FILES/services/99-adbd-udc.rules" "$MNT/etc/udev/rules.d/99-adbd-udc.rules"
     install_service usb-gadget-trigger.service
     enable_service  usb-gadget-trigger.service
     ln -sf /usr/lib/systemd/system/adbd.service "$SYSTEMD/multi-user.target.wants/adbd.service" 2>/dev/null || true
