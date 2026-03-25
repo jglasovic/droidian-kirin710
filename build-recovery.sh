@@ -164,8 +164,14 @@ PROPD_CACHE="$HALIUM_SBIN/propd"
 if [ -f "$PROPD_CACHE" ]; then
     echo "[*] Using cached propd"
 elif [ "$(uname)" = "Linux" ]; then
-    echo "[*] Compiling propd..."
-    gcc -O2 -static -o "$PROPD_CACHE" "$WORK_DIR/propd.c" && \
+    echo "[*] Compiling propd for arm64..."
+    # Use cross-compiler on x86_64, native gcc on arm64
+    if [ "$(uname -m)" = "aarch64" ]; then
+        CC=gcc
+    else
+        CC=aarch64-linux-gnu-gcc
+    fi
+    $CC -O2 -static -o "$PROPD_CACHE" "$WORK_DIR/propd.c" && \
         echo "[OK] propd compiled ($(du -sh "$PROPD_CACHE" | cut -f1))" || \
         echo "[WARN] propd compilation failed — adb reboot will not work in recovery"
 else
