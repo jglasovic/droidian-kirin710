@@ -51,8 +51,7 @@ Install on your Mac/Linux host:
 
 - `adb` + `fastboot` — Android platform tools
 - `curl` — HTTP downloads
-- `gh` — [GitHub CLI](https://cli.github.com/) for downloading CI artifacts
-- `sshpass` — non-interactive SSH (used by setup script)
+- `gh` (optional) — [GitHub CLI](https://cli.github.com/) for downloading the latest CI build artifacts; without it, `flash.sh` falls back to the latest GitHub release
 
 ## Setup
 
