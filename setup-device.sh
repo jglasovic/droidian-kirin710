@@ -193,7 +193,7 @@ if [ "$DO_ROOTFS" = "yes" ]; then
         PKGINDEX=$(mktemp)
         curl -sfL "${DROIDIAN_PKG_BASE}/dists/rolling/main/binary-arm64/Packages.gz" | gunzip > "$PKGINDEX"
 
-        for pkg in dhcpcd-base; do
+        for pkg in adbd android-liblog android-libbase android-libboringssl android-libcutils dhcpcd-base; do
             STANZA=$(awk "/^Package: ${pkg}\$/,/^\$/" "$PKGINDEX")
             FILE=$(echo "$STANZA" | grep '^Filename:' | head -1 | awk '{print $2}')
             VERSION=$(echo "$STANZA" | grep '^Version:' | head -1 | awk '{print $2}')
@@ -210,88 +210,6 @@ if [ "$DO_ROOTFS" = "yes" ]; then
         done
         rm -f "$PKGINDEX"
         echo "[OK] Downloaded $(ls "$EXTRAS_LOCAL"/*.deb 2>/dev/null | wc -l | tr -d ' ') debs"
-    fi
-fi
-
-# ── Download boot image (multi-tier) ────────────────────────────────────────
-if [ "$DO_KERNEL" = "yes" ]; then
-    if [ -f "$BOOT_IMG" ]; then
-        echo "[OK] $BOOT_IMG already present ($(du -sh "$BOOT_IMG" | cut -f1)) — skipping download."
-    else
-        echo "[*] Downloading $BOOT_IMG..."
-        DOWNLOADED=false
-
-        # Tier 1: Check for local halium-boot.img (generic name)
-        if [ "$DOWNLOADED" = false ] && [ -f "halium-boot.img" ]; then
-            echo "    Found local halium-boot.img, using as $BOOT_IMG."
-            cp "halium-boot.img" "$BOOT_IMG"
-            DOWNLOADED=true
-        fi
-
-        # Tier 2: GitHub releases — find asset matching variant name
-        if [ "$DOWNLOADED" = false ]; then
-            RELEASE_URL=$(curl -sf "https://api.github.com/repos/${REPO}/releases" \
-                | python3 -c "
-import sys, json
-variant = '${KERNEL_VARIANT}'
-for r in json.load(sys.stdin):
-    for a in r.get('assets', []):
-        name = a['name']
-        if variant in name and name.endswith('.img'):
-            print(a['browser_download_url'])
-            sys.exit(0)
-        if name == 'halium-boot.img':
-            print(a['browser_download_url'])
-            sys.exit(0)
-sys.exit(1)
-" 2>/dev/null) && {
-                echo "    Found in GitHub releases."
-                curl -fSL --retry 3 -o "$BOOT_IMG" "$RELEASE_URL"
-                DOWNLOADED=true
-            } || true
-        fi
-
-        # Tier 3: CI artifacts via gh — variant-named artifact
-        if [ "$DOWNLOADED" = false ] && command -v gh &>/dev/null; then
-            echo "    Trying CI artifact: halium-boot-${KERNEL_VARIANT}..."
-            RUN_ID=$(gh run list -R "$REPO" -w "Build halium-boot.img" -s completed -L 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
-            if [ -n "$RUN_ID" ]; then
-                if gh run download "$RUN_ID" -R "$REPO" -n "halium-boot-${KERNEL_VARIANT}" -D . 2>/dev/null; then
-                    # Artifact may contain halium-boot.img inside
-                    if [ -f "halium-boot.img" ] && [ ! -f "$BOOT_IMG" ]; then
-                        mv "halium-boot.img" "$BOOT_IMG"
-                    fi
-                    [ -f "$BOOT_IMG" ] && DOWNLOADED=true
-                fi
-            fi
-        fi
-
-        # Tier 4: CI artifacts via gh — generic artifact name (warn)
-        if [ "$DOWNLOADED" = false ] && command -v gh &>/dev/null; then
-            echo "    Trying CI artifact: halium-boot (generic)..."
-            RUN_ID=$(gh run list -R "$REPO" -w "Build halium-boot.img" -s completed -L 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
-            if [ -n "$RUN_ID" ]; then
-                if gh run download "$RUN_ID" -R "$REPO" -n "halium-boot" -D . 2>/dev/null; then
-                    if [ -f "halium-boot.img" ]; then
-                        echo "    WARNING: Downloaded generic halium-boot.img — may not match variant '$KERNEL_VARIANT'."
-                        mv "halium-boot.img" "$BOOT_IMG"
-                        DOWNLOADED=true
-                    fi
-                fi
-            fi
-        fi
-
-        # Tier 5: Fail
-        if [ "$DOWNLOADED" = false ]; then
-            die "Could not download $BOOT_IMG.
-       Options:
-         - Place $BOOT_IMG (or halium-boot.img) in the working directory
-         - Create a GitHub release with the boot image
-         - Install 'gh' CLI and authenticate (brew install gh && gh auth login)
-         - Download manually from: https://github.com/$REPO/actions"
-        fi
-
-        echo "[OK] $BOOT_IMG ($(du -sh "$BOOT_IMG" | cut -f1))"
     fi
 fi
 
@@ -344,14 +262,14 @@ if [ "$DO_ROOTFS" = "yes" ]; then
         adb shell "cd /mnt && tar -oxf /tmp/devtools-payload.tar; ln -sf /var/cache/package-sideload system-update"
     fi
     if [ -d "$EXTRAS_LOCAL" ] && [ "$(ls "$EXTRAS_LOCAL"/*.deb 2>/dev/null | wc -l)" -gt 0 ]; then
-        echo "[*] Installing extras (dhcpcd)..."
+        echo "[*] Installing extras (adbd, dhcpcd)..."
         adb shell "mkdir -p /tmp/extras"
         adb push "$EXTRAS_LOCAL/." /tmp/extras
         adb shell "
             BUNDLE=/mnt/var/cache/package-sideload/bundles/kirin710-extras
             mkdir -p \$BUNDLE/archives
             mv /tmp/extras/*.deb \$BUNDLE/archives/
-            printf 'dhcpcd-base\n' > \$BUNDLE/packages
+            printf 'adbd\ndhcpcd-base\n' > \$BUNDLE/packages
             rm -rf /tmp/extras
         "
     fi
@@ -449,17 +367,6 @@ echo "  Password: 1234"
 echo ""
 echo "  The device will reboot twice: first boot installs sideloaded"
 echo "  packages, second boot is ready to use."
-
-# Reboot if any changes were made
-DID_CHANGE=false
-[ "$DO_ROOTFS" = "yes" ] && DID_CHANGE=true
-[ -n "$FLAGS" ] && DID_CHANGE=true
-
-if [ "$DID_CHANGE" = true ]; then
-    echo ""
-    echo "[*] Rebooting device..."
-    adb reboot
-fi
 
 # Clean up temp dir if running from curl
 if [ "$FROM_CURL" = true ]; then
