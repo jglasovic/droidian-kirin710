@@ -106,13 +106,10 @@ for tool in sh ash echo cat ls sleep mount umount mkdir rm cp mv ln chmod \
   ln -sf busybox "$RD/bin/$tool"
 done
 
-# reboot wrapper — busybox reboot signals PID1 which ignores it; use sysrq instead
+# reboot wrapper — delegate to reboot-helper which uses LINUX_REBOOT_CMD_RESTART2
 cat > "$RD/bin/reboot" << 'REBOOT_EOF'
 #!/bin/sh
-# Note: Huawei bootloader does not support software reboot-to-fastboot.
-# To enter fastboot: power off, hold Volume Down + Power.
-sync
-echo b > /proc/sysrq-trigger
+exec /sbin/reboot-helper "$@"
 REBOOT_EOF
 chmod 755 "$RD/bin/reboot"
 for tool in ip telnetd; do
