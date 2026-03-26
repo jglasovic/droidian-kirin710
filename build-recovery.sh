@@ -99,12 +99,24 @@ ln -sf aarch64-linux-gnu/ld-2.24.so "$RD/lib/ld-linux-aarch64.so.1"
 # Copy busybox and create essential symlinks
 cp "$HALIUM_BIN/busybox" "$RD/bin/busybox"
 chmod 755 "$RD/bin/busybox"
-for tool in sh ash echo cat ls sleep mount umount mkdir rm cp mv ln chmod \
+for tool in ash echo cat ls sleep mount umount mkdir rm cp mv ln chmod \
             seq od dd wc awk sed grep head tail cut sort uniq \
             touch sync stat mknod blkid \
             dmesg date uptime; do
   ln -sf busybox "$RD/bin/$tool"
 done
+
+# /bin/sh wrapper — overrides busybox's built-in reboot so "reboot bootloader"
+# works in adb shell. Functions take precedence over built-ins in busybox ash.
+cat > "$RD/bin/sh" << 'SH_EOF'
+#!/bin/busybox ash
+if [ "$1" = "-c" ]; then
+  shift
+  exec busybox ash -c 'reboot() { /bin/reboot "$@"; }; '"$1" "$@"
+fi
+exec busybox ash "$@"
+SH_EOF
+chmod 755 "$RD/bin/sh"
 
 # reboot wrapper — delegate to reboot-helper which uses LINUX_REBOOT_CMD_RESTART2
 cat > "$RD/bin/reboot" << 'REBOOT_EOF'
