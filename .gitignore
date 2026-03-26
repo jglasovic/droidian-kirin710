@@ -24,10 +24,7 @@ recovery-init.sh
 
 # macOS
 .DS_Store
-*.so
-*.so.*
+
+# Compiled binaries (built locally for testing, not committed)
 reboot-helper
-test-propd
-test-setprop
-test-propd.c
-test-setprop.c
+libprop-fix.so
