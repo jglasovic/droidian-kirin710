@@ -159,28 +159,68 @@ if [ -n "$ADBD_SRC" ]; then
     echo "[*] adbd included with $(ls "$RD/lib/adbd" | wc -l) bundled libs"
 fi
 
-# propd — minimal property service so 'adb reboot [bootloader|recovery]' works
-PROPD_CACHE="$HALIUM_SBIN/propd"
-if [ -f "$PROPD_CACHE" ]; then
-    echo "[*] Using cached propd"
-elif [ "$(uname)" = "Linux" ]; then
-    echo "[*] Compiling propd for arm64..."
-    # Use cross-compiler on x86_64, native gcc on arm64
+# Cross-compiler setup (used for both propd and reboot-helper)
+if [ "$(uname)" = "Linux" ]; then
     if [ "$(uname -m)" = "aarch64" ]; then
         CC=gcc
     else
         CC=aarch64-linux-gnu-gcc
     fi
+fi
+
+# propd — property service (property protocol fallback for adb reboot)
+PROPD_CACHE="$HALIUM_SBIN/propd"
+if [ -f "$PROPD_CACHE" ]; then
+    echo "[*] Using cached propd"
+elif [ "$(uname)" = "Linux" ]; then
+    echo "[*] Compiling propd for arm64..."
     $CC -O2 -static -o "$PROPD_CACHE" "$WORK_DIR/propd.c" && \
         echo "[OK] propd compiled ($(du -sh "$PROPD_CACHE" | cut -f1))" || \
-        echo "[WARN] propd compilation failed — adb reboot will not work in recovery"
+        echo "[WARN] propd compilation failed"
 else
-    echo "[WARN] propd not available (compile on Linux/CI required)"
+    echo "[WARN] propd not available (Linux build required)"
 fi
 if [ -f "$PROPD_CACHE" ]; then
     cp "$PROPD_CACHE" "$RD/sbin/propd"
     chmod 755 "$RD/sbin/propd"
     echo "[*] propd included in recovery"
+fi
+
+# reboot-helper — direct reboot syscall binary (used by propd's do_reboot)
+REBOOT_HELPER_CACHE="$HALIUM_SBIN/reboot-helper"
+if [ -f "$REBOOT_HELPER_CACHE" ]; then
+    echo "[*] Using cached reboot-helper"
+elif [ "$(uname)" = "Linux" ]; then
+    echo "[*] Compiling reboot-helper for arm64..."
+    $CC -O2 -static -o "$REBOOT_HELPER_CACHE" "$WORK_DIR/reboot-helper.c" && \
+        echo "[OK] reboot-helper compiled" || \
+        echo "[WARN] reboot-helper compilation failed"
+else
+    echo "[WARN] reboot-helper not available (Linux build required)"
+fi
+if [ -f "$REBOOT_HELPER_CACHE" ]; then
+    cp "$REBOOT_HELPER_CACHE" "$RD/sbin/reboot-helper"
+    chmod 755 "$RD/sbin/reboot-helper"
+    echo "[*] reboot-helper included in recovery"
+fi
+
+# libprop-fix.so — LD_PRELOAD shim that overrides __system_property_set in adbd's
+# bundled libbase to actually connect to propd's socket instead of being a stub
+LIBPROP_CACHE="$HALIUM_SBIN/libprop-fix.so"
+if [ -f "$LIBPROP_CACHE" ]; then
+    echo "[*] Using cached libprop-fix.so"
+elif [ "$(uname)" = "Linux" ]; then
+    echo "[*] Compiling libprop-fix.so for arm64..."
+    $CC -O2 -shared -fPIC -nostartfiles \
+        -o "$LIBPROP_CACHE" "$WORK_DIR/libprop-fix.c" && \
+        echo "[OK] libprop-fix.so compiled" || \
+        echo "[WARN] libprop-fix.so compilation failed"
+else
+    echo "[WARN] libprop-fix.so not available (Linux build required)"
+fi
+if [ -f "$LIBPROP_CACHE" ]; then
+    cp "$LIBPROP_CACHE" "$RD/lib/adbd/libprop-fix.so"
+    echo "[*] libprop-fix.so included in recovery"
 fi
 
 # ── Write /init ──────────────────────────────────────────────────────────────
@@ -296,12 +336,10 @@ else
   echo "Droidian"          > "$GADGET/strings/0x409/manufacturer"
   echo "Recovery"          > "$GADGET/strings/0x409/product"
 
-  # Property service daemon — enables 'adb reboot [bootloader|recovery]'
+  # Property service daemon — fallback for adbd builds that use property protocol
   if [ -x /sbin/propd ]; then
     /sbin/propd &
     log "STEP8: propd started (pid=$!)"
-  else
-    log "STEP8: propd not found — adb reboot will not work"
   fi
 
   # ADB function — FunctionFS (adbd writes descriptors before UDC bind)
@@ -311,8 +349,10 @@ else
     mkdir -p /dev/usb-ffs/adb
     if mount -t functionfs adb /dev/usb-ffs/adb 2>/dev/null; then
       log "STEP8: FFS mounted at /dev/usb-ffs/adb"
-      # Start adbd via bundled ld-linux (recovery glibc 2.24 < adbd's GLIBC_2.38 req)
-      /lib/adbd/ld-linux.so --library-path /lib/adbd /sbin/adbd &
+      # Start adbd with libprop-fix.so preloaded — overrides __system_property_set
+      # so adbd's SetProperty("sys.powerctl") actually reaches propd via the socket.
+      LD_PRELOAD=/lib/adbd/libprop-fix.so \
+        /lib/adbd/ld-linux.so --library-path /lib/adbd /sbin/adbd &
       ADBD_PID=$!
       log "STEP8: adbd started (pid=$ADBD_PID), waiting for FFS descriptors..."
       # Poll ep0 for descriptor write (adbd signals ready when ep0 becomes writable)

@@ -24,3 +24,10 @@ recovery-init.sh
 
 # macOS
 .DS_Store
+*.so
+*.so.*
+reboot-helper
+test-propd
+test-setprop
+test-propd.c
+test-setprop.c
