@@ -7,11 +7,19 @@
  *   adb reboot bootloader → LINUX_REBOOT_CMD_RESTART2("bootloader")
  *   adb reboot recovery   → LINUX_REBOOT_CMD_RESTART2("recovery")
  *
- * Protocol: Android property service v2 (PROP_MSG_SETPROP2 = 0x23)
+ * Supports two protocol variants:
+ *
+ * v2 (PROP_MSG_SETPROP2 = 0x23) — newer adbd:
  *   uint32_t cmd
  *   uint32_t key_len  + key bytes
  *   uint32_t val_len  + val bytes
  *   → respond uint32_t 0 (success)
+ *
+ * v1 (PROP_MSG_SETPROP = 0x01) — older adbd / Debian libcutils:
+ *   uint32_t cmd
+ *   char     name[PROP_NAME_MAX=32]
+ *   char     value[PROP_VALUE_MAX=92]
+ *   → no response expected
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,7 +34,10 @@
 #include <stdint.h>
 
 #define PROP_SERVICE_SOCKET "/dev/socket/property_service"
+#define PROP_MSG_SETPROP    0x00000001u
 #define PROP_MSG_SETPROP2   0x00000023u
+#define PROP_NAME_MAX       32
+#define PROP_VALUE_MAX      92
 
 static int read_exact(int fd, void *buf, size_t len) {
     size_t done = 0;
@@ -66,9 +77,9 @@ static void do_reboot(const char *arg) {
         syscall(SYS_reboot, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,
                 LINUX_REBOOT_CMD_RESTART2, arg);
     }
-    /* Plain reboot (normal boot) — fallback */
-    int fd = open("/proc/sysrq-trigger", O_WRONLY);
-    if (fd >= 0) { write(fd, "b", 1); close(fd); }
+    /* Plain reboot — use RESTART syscall (sysrq may be suppressed on Huawei) */
+    syscall(SYS_reboot, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,
+            LINUX_REBOOT_CMD_RESTART, 0);
 }
 
 static void handle_powerctl(const char *value) {
@@ -105,17 +116,35 @@ int main(void) {
         if (cli < 0) continue;
 
         uint32_t cmd = 0;
-        if (read_exact(cli, &cmd, 4) == 0 && cmd == PROP_MSG_SETPROP2) {
+        if (read_exact(cli, &cmd, 4) < 0) { close(cli); continue; }
+
+        if (cmd == PROP_MSG_SETPROP2) {
+            /* v2: length-prefixed key and value, respond with uint32 0 */
             char *key = read_lpstring(cli);
             char *val = read_lpstring(cli);
             uint32_t result = 0;
             write_exact(cli, &result, 4);
             close(cli);
-            if (key && val && strcmp(key, "sys.powerctl") == 0) {
+            if (key && val && strcmp(key, "sys.powerctl") == 0)
                 handle_powerctl(val);
-            }
             free(key);
             free(val);
+
+        } else if (cmd == PROP_MSG_SETPROP) {
+            /* v1: fixed-size name[32] + value[92], no response */
+            char name[PROP_NAME_MAX];
+            char value[PROP_VALUE_MAX];
+            if (read_exact(cli, name, PROP_NAME_MAX) == 0 &&
+                read_exact(cli, value, PROP_VALUE_MAX) == 0) {
+                name[PROP_NAME_MAX - 1] = '\0';
+                value[PROP_VALUE_MAX - 1] = '\0';
+                close(cli);
+                if (strcmp(name, "sys.powerctl") == 0)
+                    handle_powerctl(value);
+            } else {
+                close(cli);
+            }
+
         } else {
             close(cli);
         }
